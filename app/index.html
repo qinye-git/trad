@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://hq.sinajs.cn https://finance.sina.com.cn;">
+<title>A股量化筛选系统</title>
+<style>*{margin:0;padding:0;box-sizing:border-box;}
+:root{
+  --bg:#0d1117;--bg2:#161b22;--bg3:#1c2128;--bg4:#21262d;
+  --border:#30363d;--border2:#3d444d;
+  --text:#e6edf3;--text2:#8b949e;--text3:#656d76;
+  --accent:#58a6ff;--accent2:#1f6feb;
+  --green:#3fb950;--red:#f85149;--yellow:#e3b341;--purple:#d2a8ff;
+  --radius:8px;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:13px;overflow:hidden;}
+.app{display:flex;flex-direction:column;height:100vh;}
+.header{padding:12px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--bg2);flex-shrink:0;}
+.logo{display:flex;align-items:center;gap:10px;}
+.logo-mark{width:28px;height:28px;background:linear-gradient(135deg,var(--accent),var(--purple));border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#0d1117;}
+.logo-text{font-size:15px;font-weight:600;}
+.logo-text span{color:var(--accent);}
+.status-pill{display:flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:4px 12px;font-size:11px;color:var(--text2);}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--text3);transition:all .3s;}
+.dot.saving{background:var(--yellow);box-shadow:0 0 6px var(--yellow);}
+.dot.running{background:var(--red);box-shadow:0 0 10px var(--red);animation:blink .8s ease-in-out infinite;}
+.dot.done{background:var(--green);box-shadow:0 0 8px var(--green);animation:glow 1.5s ease-in-out 2;}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:.25;}}
+@keyframes glow{0%,100%{box-shadow:0 0 8px var(--green);}50%{box-shadow:0 0 18px var(--green),0 0 30px var(--green);}}
+.header-meta{font-size:11px;color:var(--text3);}
+.body{display:flex;flex:1;overflow:hidden;}
+.sidebar{width:264px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;flex-shrink:0;}
+.sidebar::-webkit-scrollbar{width:4px;}
+.sidebar::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
+.side-section{padding:14px 16px;border-bottom:1px solid var(--border);}
+.side-title{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px;}
+.btn{width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg3);color:var(--text);cursor:pointer;font-size:12px;text-align:left;transition:all .15s;display:flex;align-items:center;gap:8px;font-family:inherit;margin-bottom:5px;}
+.btn:hover:not(.disabled){background:var(--bg4);border-color:var(--accent);color:var(--accent);}
+.btn.primary{background:var(--accent2);border-color:var(--accent);color:#fff;font-weight:600;}
+.btn.primary:hover:not(.disabled){background:var(--accent);color:#0d1117;}
+.btn.danger{border-color:rgba(248,81,73,.4);color:var(--red);}
+.btn.danger:hover:not(.disabled){background:rgba(248,81,73,.1);}
+.btn.disabled{opacity:.35;cursor:not-allowed;pointer-events:none;}
+.info-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:11px;margin-top:2px;}
+.info-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;}
+.info-row:last-child{margin-bottom:0;}
+.info-key{color:var(--text2);font-size:11px;}
+.info-val{font-weight:600;font-size:12px;}
+.info-val.accent{color:var(--accent);}
+.info-val.green{color:var(--green);}
+.mode-switch{display:flex;gap:3px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:3px;margin-bottom:12px;}
+.mode-btn{flex:1;padding:5px 0;text-align:center;border-radius:5px;cursor:pointer;font-size:11px;color:var(--text2);transition:all .15s;font-weight:500;user-select:none;}
+.mode-btn.active{background:var(--accent2);color:#fff;}
+.mode-btn:hover:not(.active){background:var(--bg4);color:var(--text);}
+.param-group{margin-bottom:12px;}
+.param-label{display:flex;justify-content:space-between;margin-bottom:5px;font-size:11px;color:var(--text2);}
+.param-val{color:var(--accent);font-weight:600;}
+input[type=range]{width:100%;-webkit-appearance:none;height:4px;border-radius:2px;background:var(--border2);outline:none;cursor:pointer;}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--bg2);}
+.toggle-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-size:11px;color:var(--text2);}
+.toggle{position:relative;width:34px;height:18px;}
+.toggle input{opacity:0;width:0;height:0;}
+.toggle-slider{position:absolute;inset:0;background:var(--border2);border-radius:9px;cursor:pointer;transition:.2s;}
+.toggle-slider:before{content:'';position:absolute;height:12px;width:12px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.2s;}
+.toggle input:checked+.toggle-slider{background:var(--accent2);}
+.toggle input:checked+.toggle-slider:before{transform:translateX(16px);}
+.grade-select{width:100%;padding:5px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;font-family:inherit;cursor:pointer;margin-bottom:8px;}
+.apply-btn{width:100%;padding:8px;background:var(--accent2);border:none;border-radius:var(--radius);color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .15s;}
+.apply-btn:hover{background:var(--accent);color:#0d1117;}
+.save-hint{font-size:10px;color:var(--green);text-align:center;margin-top:5px;min-height:14px;}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+.tabs{display:flex;border-bottom:1px solid var(--border);background:var(--bg2);flex-shrink:0;}
+.tab{padding:10px 20px;cursor:pointer;font-size:12px;color:var(--text2);border-bottom:2px solid transparent;transition:all .15s;user-select:none;}
+.tab:hover{color:var(--text);}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+.tab-badge{display:inline-block;background:var(--accent2);color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;margin-left:5px;}
+.tab-content{flex:1;overflow:hidden;display:none;}
+.tab-content.active{display:flex;flex-direction:column;}
+.results-wrap{flex:1;overflow-y:auto;padding:16px;}
+.results-wrap::-webkit-scrollbar{width:5px;}
+.results-wrap::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:12px;color:var(--text3);}
+.empty-icon{font-size:40px;opacity:.3;}
+.result-meta{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;}
+.chip{background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:4px 12px;font-size:11px;color:var(--text2);}
+.chip b{color:var(--accent);}
+.chip.green b{color:var(--green);}
+table{width:100%;border-collapse:collapse;}
+thead tr{border-bottom:2px solid var(--border);}
+th{padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);font-weight:600;text-align:left;white-space:nowrap;}
+td{padding:9px 12px;border-bottom:1px solid rgba(48,54,61,.5);font-size:12px;}
+tr:hover td{background:rgba(88,166,255,.04);}
+.grade-badge{display:inline-block;width:22px;height:22px;border-radius:4px;text-align:center;line-height:22px;font-size:11px;font-weight:700;}
+    .industry-tag{display:inline-block;padding:2px 7px;border-radius:10px;font-size:11px;background:rgba(99,179,237,0.13);color:var(--blue,#63b3ed);border:1px solid rgba(99,179,237,0.25);white-space:nowrap;}
+    .price-cell{font-weight:600;font-size:13px;font-variant-numeric:tabular-nums;letter-spacing:0.02em;}
+.grade-badge.A{background:rgba(63,185,80,.15);color:var(--green);}
+.grade-badge.B{background:rgba(88,166,255,.15);color:var(--accent);}
+.score-wrap{display:flex;align-items:center;gap:8px;}
+.score-track{width:50px;height:3px;background:var(--border);border-radius:2px;overflow:hidden;}
+.score-fill{height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));}
+.up{color:var(--red);}.dn{color:var(--green);}
+.code-cell{font-weight:600;font-family:'Courier New',monospace;color:var(--accent);}
+.log-wrap{flex:1;overflow-y:auto;padding:16px;font-family:'Courier New',monospace;font-size:12px;}
+.log-wrap::-webkit-scrollbar{width:5px;}
+.log-wrap::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+.log-line{line-height:1.8;white-space:pre-wrap;word-break:break-all;}
+.log-line.info{color:var(--text);}.log-line.success{color:var(--green);}
+.log-line.error{color:var(--red);}.log-line.warn{color:var(--yellow);}
+.log-line.dim{color:var(--text3);}
+.bottombar{padding:5px 20px;border-top:1px solid var(--border);background:var(--bg2);display:flex;justify-content:space-between;font-size:10px;color:var(--text3);flex-shrink:0;}
+
+.index-item{background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 10px;}.index-item.up{border-color:#3fb95044;}.index-item.down{border-color:#f8514944;}.idx-price.up,.idx-pct.up,.idx-chg.up{color:var(--red);}.idx-price.down,.idx-pct.down,.idx-chg.down{color:var(--green);}
+</style>
+</head>
+<body>
+<div class="app">
+<div class="header">
+  <div class="logo"><div class="logo-mark">Q</div><div class="logo-text"><span>A股</span>量化筛选系统</div></div>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <div class="status-pill"><span class="dot" id="dot"></span><span id="task-status">空闲</span></div>
+    <div class="header-meta" id="header-meta"></div>
+  </div>
+</div>
+<div class="body">
+
+<div class="sidebar">
+  <div class="side-section">
+    <div class="side-title">筛选操作</div>
+    <button class="btn primary" id="btn-screen" onclick="runScreen()">▶ 开始筛选</button>
+    <button class="btn" id="btn-screen-full" onclick="runScreenFull()">↻ 更新池并筛选</button>
+    <button class="btn" id="btn-update" onclick="updateCodes()">↓ 仅更新股票池</button>
+    <button class="btn danger disabled" id="btn-cancel" onclick="cancelTask()">■ 停止任务</button>
+  </div>
+
+  <div class="side-section">
+    <div class="side-title">市场行情</div>
+    <div id="index-bar" style="display:flex;flex-direction:column;gap:6px;">
+      <div class="index-item" id="idx-sh">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:11px;color:var(--text2);">上证指数</span>
+          <span class="idx-chg" id="idx-sh-chg" style="font-size:11px;">--</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;">
+          <span class="idx-price" id="idx-sh-price" style="font-size:18px;font-weight:600;letter-spacing:0.5px;">--</span>
+          <span class="idx-pct" id="idx-sh-pct" style="font-size:12px;font-weight:600;">--</span>
+        </div>
+      </div>
+      <div class="index-item" id="idx-sz">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:11px;color:var(--text2);">深证成指</span>
+          <span class="idx-chg" id="idx-sz-chg" style="font-size:11px;">--</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;">
+          <span class="idx-price" id="idx-sz-price" style="font-size:16px;font-weight:600;letter-spacing:0.5px;">--</span>
+          <span class="idx-pct" id="idx-sz-pct" style="font-size:12px;font-weight:600;">--</span>
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--text3);text-align:right;margin-top:2px;" id="idx-update-time">--</div>
+    </div>
+  </div>
+
+  <div class="side-section">
+    <div class="side-title">筛选模式</div>
+    <div class="mode-switch">
+      <div class="mode-btn" id="mode-strict" onclick="applyPreset('strict')">严格</div>
+      <div class="mode-btn" id="mode-normal" onclick="applyPreset('normal')">标准</div>
+      <div class="mode-btn active" id="mode-loose" onclick="applyPreset('loose')">宽松</div>
+    </div>
+    <div class="param-group">
+      <div class="param-label"><span>跑赢基准（%）</span><span class="param-val" id="v-benchmark"></span></div>
+      <input type="range" id="r-benchmark" min="-3" max="5" step="0.5" oninput="syncUI()">
+    </div>
+    <div class="param-group">
+      <div class="param-label"><span>10日上涨天数 ≥</span><span class="param-val" id="v-updays"></span></div>
+      <input type="range" id="r-updays" min="1" max="9" step="1" oninput="syncUI()">
+    </div>
+    <div class="param-group">
+      <div class="param-label"><span>量比下限</span><span class="param-val" id="v-volmin"></span></div>
+      <input type="range" id="r-volmin" min="0.5" max="1.5" step="0.05" oninput="syncUI()">
+    </div>
+    <div class="param-group">
+      <div class="param-label"><span>最低得分 ≥</span><span class="param-val" id="v-score"></span></div>
+      <input type="range" id="r-score" min="0" max="6" step="1" oninput="syncUI()">
+    </div>
+    <div class="toggle-row">
+      <span>要求站上MA20</span>
+      <label class="toggle"><input type="checkbox" id="t-ma20" onchange="syncUI()"><span class="toggle-slider"></span></label>
+    </div>
+    <div class="param-label" style="margin-bottom:5px">最低评级</div>
+    <select class="grade-select" id="s-grade" onchange="syncUI()">
+      <option value="A">A级（成交额≥500万）</option>
+      <option value="B" selected>B级（含低流动性）</option>
+    </select>
+    <button class="apply-btn" onclick="saveParams()">✓ 应用参数</button>
+    <div class="save-hint" id="save-hint"></div>
+  </div>
+
+  <div class="side-section">
+    <div class="side-title">数据状态</div>
+    <div class="info-card">
+      <div class="info-row"><span class="info-key">股票池数量</span><span class="info-val accent" id="s-count">--</span></div>
+      <div class="info-row"><span class="info-key">更新时间</span><span class="info-val" id="s-mtime" style="font-size:10px">--</span></div>
+      <div class="info-row"><span class="info-key">上次入选</span><span class="info-val green" id="s-picked">--</span></div>
+    </div>
+  <div class="info-card" style="margin-top:8px;">
+      <div class="info-row"><span class="info-key">阶段</span><span class="info-val" id="pm-stage">--</span></div>
+      <div class="info-row"><span class="info-key">总耗时</span><span class="info-val" id="pm-elapsed">--</span></div>
+      <div class="info-row"><span class="info-key">数量(F/R/T/L/P)</span><span class="info-val" id="pm-counts" style="font-size:10px">--</span></div>
+      <div class="info-row"><span class="info-key">缓存命中(K/V/R)</span><span class="info-val" id="pm-cache" style="font-size:10px">--</span></div>
+      <div class="info-row"><span class="info-key">阶段耗时(U/P1/V/P2/L/A)</span><span class="info-val" id="pm-timing" style="font-size:10px">--</span></div>
+    </div>
+    <button class="btn" onclick="openResultFile()" style="margin-top:8px;font-size:11px">↗ 用系统程序打开摘要</button>
+    <button class="btn" onclick="viewSummaryInApp()" style="font-size:11px">☰ 在窗口内查看摘要</button>
+  </div>
+</div>
+
+<div class="main">
+  <div class="tabs">
+    <div class="tab active" id="tab-btn-results" onclick="switchTab('results')">筛选结果 <span class="tab-badge" id="badge-results">0</span></div>
+    <div class="tab" id="tab-btn-log" onclick="switchTab('log')">运行日志</div>
+    <div class="tab" id="tab-btn-summary" onclick="switchTab('summary')">摘要报告</div>
+  </div>
+  <div class="tab-content active" id="tab-results">
+    <div class="results-wrap">
+      <div class="empty-state" id="results-empty"><div class="empty-icon">📈</div><div>点击「开始筛选」运行全市场量化筛选</div></div>
+      <div id="results-content" style="display:none">
+        <div class="result-meta" id="result-meta"></div>
+        <table>
+          <thead><tr>
+            <th>#</th><th>代码</th><th>名称</th><th>评级</th><th>得分</th>
+            <th>股价</th><th>5日超额</th><th>ADV5成交</th><th>MA20</th><th>板块</th>
+          </tr></thead>
+          <tbody id="results-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="tab-content" id="tab-log">
+    <div id="progress-bar-wrap" style="display:none;padding:10px 16px 0;">
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2);margin-bottom:4px;">
+        <span id="progress-label">筛选进度</span>
+        <span id="progress-pct">0%</span>
+      </div>
+      <div style="background:var(--bg3);border-radius:4px;height:6px;overflow:hidden;">
+        <div id="progress-fill" style="height:100%;width:0%;background:var(--red);border-radius:4px;transition:width .3s;"></div>
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px;" id="progress-sub"></div>
+    </div>
+    <div class="log-wrap" id="log-wrap"><div class="log-line dim">运行日志将在此显示...</div></div>
+  </div>
+  <div class="tab-content" id="tab-summary">
+    <div class="results-wrap" id="summary-wrap">
+      <div class="empty-state" id="summary-empty"><div class="empty-icon">📄</div><div>点击「在窗口内查看摘要」或运行筛选后自动加载</div></div>
+      <pre id="summary-content" style="display:none;color:var(--text);font-family:'Courier New',monospace;font-size:12px;line-height:1.8;white-space:pre-wrap;"></pre>
+    </div>
+  </div>
+</div>
+
+</div>
+<div class="bottombar">
+  <span>数据来源: 新浪行情 / 腾讯 fqkline</span>
+  <span id="bottom-time"></span>
+</div>
+</div>
+
+<script src="renderer.js"></script>
+</body>
+</html>

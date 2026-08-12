@@ -1,0 +1,10 @@
+{
+  "selected_strategy": "pure_lightgbm",
+  "selection_rule": {
+    "top_n": 30,
+    "rebalance_days": 10,
+    "prediction_smoothing_days": 1
+  },
+  "weights_file": "final_robust_factor_weights_for_backtest.json",
+  "note": "当前对照实验里纯LightGBM样本外表现最佳；权重文件保留用于备选/对照学习。"
+}

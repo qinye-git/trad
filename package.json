@@ -1,0 +1,25 @@
+{
+  "name": "trad",
+  "version": "1.0.0",
+  "description": "A股量化筛选系统",
+  "main": "app/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --inspect",
+    "phase1": "node qscreen_all_a.mjs --skipFetch true",
+    "phase1:refresh": "node qscreen_all_a.mjs --forceRefresh true",
+    "phase2": "node qscreen_all_a.mjs --skipFetch true --phase phase2",
+    "phase2:refresh": "node qscreen_all_a.mjs --forceRefresh true --phase phase2",
+    "phase4:replay": "python scripts/replay_backtest_log.py"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "electron": "^41.0.3",
+    "postject": "^1.0.0-alpha.6"
+  }
+}

@@ -1,0 +1,178 @@
+version: 1
+name: "量化选股限制（5天持仓）"
+universe:
+  market: "A股"
+  benchmark_index: "中证全指"
+  boards:
+    include:
+      - "主板"
+      - "科创板(688)"
+    exclude:
+      - "创业板(300/301)"
+time_horizon:
+  holding_days_target: 5
+  signals_window_days:
+    short: 5
+    mid: 10
+    trend: 20
+    risk: 60
+    drawdown: 252
+
+data_conventions:
+  pct_unit: "decimal"
+  amount_unit: "CNY"
+  industry_schema: "SW1"
+  adv_amount:
+    ADV5_amount: "近5交易日日均成交额"
+  adv_volume:
+    ADV5_vol: "近5交易日日均成交量"
+    ADV20_vol: "近20交易日日均成交量"
+  returns:
+    ret_5d: "个股近5日收益率"
+    idx_ret_5d: "中证全指近5日收益率"
+  moving_average:
+    MA20: "20日均线"
+
+filters_hard:
+  trading_status:
+    - id: not_suspended
+      rule: "volume > 0"
+      risk: "停牌/无量无法成交"
+    - id: no_st
+      rule: "NOT(name contains 'ST' OR name contains '*ST')"
+      risk: "ST 风险/退市风险显著升高"
+  liquidity:
+    - id: min_adv5_amount_user
+      rule: "ADV5_amount >= 10000"
+      risk: "成交额过低"
+    - id: liquidity_guardrail_recommended
+      rule: "ADV5_amount >= 5000000"
+      severity: "recommended"
+      action_if_fail: "risk_flag_only"
+      risk: "未达护栏则标记为高滑点"
+  tail_risk:
+    - id: no_limit_down_last60d
+      rule: "limit_down_days_60d == 0"
+      risk: "近60日有跌停史"
+  risk_limits:
+    - id: max_drawdown_252d
+      rule: "MDD_252d <= 0.45"
+      risk: "长期回撤过大"
+
+signals:
+  price_volume:
+    hard:
+      - id: mild_volume_expansion
+        rule: "ADV5_vol / ADV20_vol >= {{adv5_vol_ratio_min}} AND ADV5_vol / ADV20_vol <= {{adv5_vol_ratio_max}}"
+        intent: "温和放量"
+      - id: avoid_single_day_extreme_volume
+        rule: "max(volume_1d / ADV20_vol, window=10) <= 3.0"
+        intent: "避免爆量异动"
+      - id: avoid_extreme_chase_5d
+        rule: "abs(pct_5d) <= 0.25"
+        intent: "避免短期极端行情末端追单"
+      - id: avoid_near_limit_up
+        rule_by_board:
+          mainboard: "pct_1d <= 0.09"
+          star688: "pct_1d <= 0.18"
+        intent: "避免接近涨停"
+
+  relative_strength:
+    hard:
+      - id: beat_benchmark_5d
+        rule: "ret_5d - idx_ret_5d >= {{beat_benchmark_threshold}}"
+        intent: "短持仓以相对强度为核心"
+{{above_ma20_block}}
+  fund_flow_proxy:
+    hard:
+      - id: up_days_10d
+        rule: "UpDays_10d >= {{up_days_10d_min}}"
+        intent: "近10日上涨占优"
+    score:
+      - id: volume_up_days_10d
+        rule: "VolUpDays_10d >= 3"
+        definition: "VolUpDay := (close > open) AND (volume >= ADV20_vol * 1.1)"
+        points: 1
+        intent: "上涨伴随放量"
+
+  valuation_quality:
+    score:
+      - id: pe_discount_to_industry
+        rule: "PE_ttm > 0 AND PE_ttm <= 0.90 * PE_industry_ttm"
+        points: 1
+        intent: "行业内估值折价"
+      - id: roe_floor
+        rule: "ROE_avg_3y >= 0.08"
+        points: 1
+        intent: "质量底线"
+    hard:
+      - id: valuation_extreme_guard
+        rule: "NOT(PE_ttm >= 80 AND pct_5d > 0.10)"
+        intent: "高估值+短期拉升"
+      - id: loss_handling_guard
+        rule: "IF(PE_ttm <= 0, PB > 0 AND PB <= 8, true)"
+        intent: "亏损公司PB防护"
+
+  financial_redlines:
+    hard:
+      - id: earnings_cashflow_double_negative
+        rule: "NOT(NonRecurringAdj_NP_1y < 0 AND CFO_1y < 0)"
+        intent: "扣非净利与经营现金流同为负"
+      - id: cashflow_quality_3y
+        rule: "CFO_sum_3y / NP_sum_3y >= 0.5"
+        intent: "盈利质量红线"
+      - id: leverage_interest_cover
+        rule: "NOT(DebtAssetRatio > 0.75 AND InterestCoverage < 1.5)"
+        intent: "高杠杆且利息覆盖弱"
+
+  unlock_risk:
+    hard_optional:
+      - id: unlock_ratio_60d
+        rule: "unlock_value_60d / float_mktcap < 0.08"
+        if_data_missing: "skip"
+        intent: "解禁压力"
+
+scoring:
+  total_points: 10
+  rules:
+    - id: beat_benchmark_bonus
+      rule: "ret_5d - idx_ret_5d >= 0.03"
+      points: 1
+    - id: volume_up_days_points
+      from_signal: "fund_flow_proxy.score.volume_up_days_10d"
+    - id: pe_discount_points
+      from_signal: "valuation_quality.score.pe_discount_to_industry"
+    - id: roe_points
+      from_signal: "valuation_quality.score.roe_floor"
+    - id: low_drawdown_bonus
+      rule: "MDD_252d <= 0.35"
+      points: 1
+
+risk_grading:
+  grade_rules:
+    A:
+      require:
+        - "ADV5_amount >= 5000000"
+        - "limit_down_days_60d == 0"
+        - "MDD_252d <= 0.45"
+      action: "allow"
+    B:
+      require:
+        - "ADV5_amount >= 10000"
+        - "ADV5_amount < 5000000"
+        - "limit_down_days_60d == 0"
+        - "MDD_252d <= 0.45"
+      action: "allow_with_position_cut"
+      position_multiplier: 0.25
+    C:
+      else: true
+      action: "reject"
+
+output:
+  select_policy:
+    min_grade: "{{min_grade}}"
+    min_score: {{min_score}}
+    max_names: 20
+  tags:
+    - "high_slippage_risk_if_ADV5_amount_lt_5000000"
+    - "unlock_risk_if_unlock_ratio_60d_ge_0.08"

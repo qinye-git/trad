@@ -1,0 +1,5 @@
+{
+  "main": "scripts/build_exe_helper.js",
+  "output": "dist/trad_screen_blob.blob",
+  "disableExperimentalSEAWarning": true
+}

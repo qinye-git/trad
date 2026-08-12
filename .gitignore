@@ -1,0 +1,20 @@
+# 依赖
+node_modules/
+
+# 打包产物（SEA 可执行文件）
+dist/
+
+# 本地数据：缓存、K线、输出结果、股票池（运行时生成，随环境变化）
+data/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 调试产物
+.dbg/
+debug-screen-run-code-minus1.md
+
+# 临时文件
+tmp_py_cmd.mjs
+tmp_py_cmd.txt

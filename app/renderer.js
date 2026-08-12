@@ -20,9 +20,9 @@ function _updateProgressBar(){
   setDotState('running',window._progressCurrent+'/'+window._progressTotal+' ('+pct+'%)');
 }
 const PRESETS={
-  strict:{beat_benchmark_threshold:0.015,up_days_10d_min:6,adv5_vol_ratio_min:1.10,above_ma20:true,min_score:4,min_grade:'A'},
-  normal:{beat_benchmark_threshold:0.0,up_days_10d_min:5,adv5_vol_ratio_min:0.90,above_ma20:true,min_score:2,min_grade:'A'},
-  loose:{beat_benchmark_threshold:-0.01,up_days_10d_min:4,adv5_vol_ratio_min:0.80,above_ma20:false,min_score:1,min_grade:'B'},
+  strict:{beat_benchmark_threshold:0.015,up_days_10d_min:6,adv5_vol_ratio_min:1.10,adv5_vol_ratio_max:1.80,above_ma20:true,min_score:4,min_grade:'A'},
+  normal:{beat_benchmark_threshold:0.0,up_days_10d_min:5,adv5_vol_ratio_min:0.90,adv5_vol_ratio_max:2.50,above_ma20:true,min_score:2,min_grade:'A'},
+  loose:{beat_benchmark_threshold:-0.01,up_days_10d_min:4,adv5_vol_ratio_min:0.80,adv5_vol_ratio_max:3.00,above_ma20:false,min_score:1,min_grade:'B'},
 };
 function fmtAmt(v){const n=Number(v);if(!isFinite(n)||!v)return'--';if(n>=1e8)return(n/1e8).toFixed(2)+'亿';if(n>=1e4)return(n/1e4).toFixed(0)+'万';return n.toFixed(0);}
 function switchTab(name){
@@ -41,14 +41,16 @@ function syncUI(){
   const bm=parseFloat(document.getElementById('r-benchmark').value);
   const ud=parseInt(document.getElementById('r-updays').value);
   const vm=parseFloat(document.getElementById('r-volmin').value);
+  const vx=parseFloat(document.getElementById('r-volmax').value);
   const sc=parseInt(document.getElementById('r-score').value);
   document.getElementById('v-benchmark').textContent=(bm>=0?'+':'')+bm+'%';
   document.getElementById('v-updays').textContent=ud+'天';
   document.getElementById('v-volmin').textContent=vm.toFixed(2);
+  document.getElementById('v-volmax').textContent=vx.toFixed(2);
   document.getElementById('v-score').textContent=sc+'分';
   ['strict','normal','loose'].forEach(k=>{
     const p=PRESETS[k];
-    const match=Math.abs(p.beat_benchmark_threshold-(bm/100))<0.001&&p.up_days_10d_min===ud&&Math.abs(p.adv5_vol_ratio_min-vm)<0.01&&p.min_score===sc;
+    const match=Math.abs(p.beat_benchmark_threshold-(bm/100))<0.001&&p.up_days_10d_min===ud&&Math.abs(p.adv5_vol_ratio_min-vm)<0.01&&Math.abs(p.adv5_vol_ratio_max-vx)<0.01&&p.min_score===sc;
     document.getElementById('mode-'+k).classList.toggle('active',match);
   });
 }
@@ -57,6 +59,7 @@ function applyPreset(key){
   document.getElementById('r-benchmark').value=p.beat_benchmark_threshold*100;
   document.getElementById('r-updays').value=p.up_days_10d_min;
   document.getElementById('r-volmin').value=p.adv5_vol_ratio_min;
+  document.getElementById('r-volmax').value=p.adv5_vol_ratio_max;
   document.getElementById('r-score').value=p.min_score;
   document.getElementById('t-ma20').checked=p.above_ma20;
   document.getElementById('s-grade').value=p.min_grade;
@@ -67,6 +70,7 @@ function loadParams(p){
   document.getElementById('r-benchmark').value=(p.beat_benchmark_threshold||0)*100;
   document.getElementById('r-updays').value=p.up_days_10d_min||4;
   document.getElementById('r-volmin').value=p.adv5_vol_ratio_min||0.8;
+  document.getElementById('r-volmax').value=p.adv5_vol_ratio_max||3.0;
   document.getElementById('r-score').value=p.min_score||1;
   document.getElementById('t-ma20').checked=!!p.above_ma20;
   document.getElementById('s-grade').value=p.min_grade||'B';
@@ -121,7 +125,7 @@ function renderPipelineMeta(pm){
     fmtMs(tm.portfolio_action);
 }
 async function saveParams(){
-  const params={beat_benchmark_threshold:parseFloat(document.getElementById('r-benchmark').value)/100,up_days_10d_min:parseInt(document.getElementById('r-updays').value),adv5_vol_ratio_min:parseFloat(document.getElementById('r-volmin').value),adv5_vol_ratio_max:3.0,above_ma20:document.getElementById('t-ma20').checked,min_score:parseInt(document.getElementById('r-score').value),min_grade:document.getElementById('s-grade').value};
+  const params={beat_benchmark_threshold:parseFloat(document.getElementById('r-benchmark').value)/100,up_days_10d_min:parseInt(document.getElementById('r-updays').value),adv5_vol_ratio_min:parseFloat(document.getElementById('r-volmin').value),adv5_vol_ratio_max:parseFloat(document.getElementById('r-volmax').value),above_ma20:document.getElementById('t-ma20').checked,min_score:parseInt(document.getElementById('r-score').value),min_grade:document.getElementById('s-grade').value};
   const hint=document.getElementById('save-hint');
   hint.textContent='';
   setDotState('saving','写入参数...');

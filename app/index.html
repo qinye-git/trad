@@ -179,6 +179,10 @@ tr:hover td{background:rgba(88,166,255,.04);}
       <input type="range" id="r-volmin" min="0.5" max="1.5" step="0.05" oninput="syncUI()">
     </div>
     <div class="param-group">
+      <div class="param-label"><span>量比上限</span><span class="param-val" id="v-volmax"></span></div>
+      <input type="range" id="r-volmax" min="1.0" max="4.0" step="0.1" oninput="syncUI()">
+    </div>
+    <div class="param-group">
       <div class="param-label"><span>最低得分 ≥</span><span class="param-val" id="v-score"></span></div>
       <input type="range" id="r-score" min="0" max="6" step="1" oninput="syncUI()">
     </div>

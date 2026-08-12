@@ -63,7 +63,7 @@ signals:
   price_volume:
     hard:
       - id: mild_volume_expansion
-        rule: "ADV5_vol / ADV20_vol >= 1.1 AND ADV5_vol / ADV20_vol <= 3"
+        rule: "ADV5_vol / ADV20_vol >= 1.1 AND ADV5_vol / ADV20_vol <= 1.8"
         intent: "温和放量"
       - id: avoid_single_day_extreme_volume
         rule: "max(volume_1d / ADV20_vol, window=10) <= 3.0"
@@ -80,7 +80,7 @@ signals:
   relative_strength:
     hard:
       - id: beat_benchmark_5d
-        rule: "ret_5d - idx_ret_5d >= 0.025"
+        rule: "ret_5d - idx_ret_5d >= 0.05"
         intent: "短持仓以相对强度为核心"
       - id: above_ma20
         rule: "close > MA20"

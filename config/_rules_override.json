@@ -1,8 +1,8 @@
 {
-  "beat_benchmark_threshold": 0.025,
+  "beat_benchmark_threshold": 0.05,
   "up_days_10d_min": 6,
   "adv5_vol_ratio_min": 1.1,
-  "adv5_vol_ratio_max": 3,
+  "adv5_vol_ratio_max": 1.8,
   "above_ma20": true,
   "min_score": 4,
   "min_grade": "A"

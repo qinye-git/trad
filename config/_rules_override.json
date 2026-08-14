@@ -1,5 +1,5 @@
 {
-  "beat_benchmark_threshold": 0.05,
+  "beat_benchmark_threshold": 0.015,
   "up_days_10d_min": 6,
   "adv5_vol_ratio_min": 1.1,
   "adv5_vol_ratio_max": 1.8,

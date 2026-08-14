@@ -80,7 +80,7 @@ signals:
   relative_strength:
     hard:
       - id: beat_benchmark_5d
-        rule: "ret_5d - idx_ret_5d >= 0.05"
+        rule: "ret_5d - idx_ret_5d >= 0.015"
         intent: "短持仓以相对强度为核心"
       - id: above_ma20
         rule: "close > MA20"

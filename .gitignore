@@ -11,6 +11,9 @@ data/
 __pycache__/
 *.pyc
 
+# 项目本地 Python 依赖（受限环境下 --user 安装的 akshare 等）
+.pydeps/
+
 # 调试产物
 .dbg/
 debug-screen-run-code-minus1.md

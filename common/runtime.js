@@ -72,13 +72,17 @@ function resolvePythonCommand() {
 }
 
 function getPythonRuntime() {
+  const env = {
+    ...process.env,
+    PYTHONUTF8: '1',
+    PYTHONIOENCODING: 'utf-8',
+  };
+  // 项目本地 Python 依赖（.pydeps 通过 --user + PYTHONUSERBASE 安装，受限环境装不了全局时兜底）
+  const userBase = path.join(__dirname, '..', '.pydeps');
+  if (fs.existsSync(userBase)) env.PYTHONUSERBASE = userBase;
   return {
     command: resolvePythonCommand(),
-    env: {
-      ...process.env,
-      PYTHONUTF8: '1',
-      PYTHONIOENCODING: 'utf-8',
-    },
+    env,
   };
 }
 

@@ -2,18 +2,19 @@
 # valuation/pipeline.py
 # 按需查询指定股票列表的PE/PB，并集成ROE本地缓存
 # PE/PB 增量缓存策略：先读已有缓存，只补今日缺失代码，不再每天全量重建
-# 单股请求加硬超时（SINGLE_STOCK_TIMEOUT秒），超时直接放弃，不卡死整轮
+# 单请求加硬超时（SINGLE_STOCK_TIMEOUT秒），超时直接放弃，不卡死整轮
 
 try:
     import akshare as ak
 except ModuleNotFoundError:
     ak = None
+import requests
 import pandas as pd
 import concurrent.futures
+import threading
 import time
 import os
 import sys
-import socket
 import argparse
 from datetime import datetime
 from pathlib import Path
@@ -28,9 +29,7 @@ PEPB_CACHE_FILE   = str(CACHE_DIR / 'pepb_snapshot_daily.csv')
 PEPB_CACHE_PKL    = str(CACHE_DIR / 'pepb_snapshot_daily.pkl')
 
 MAX_WORKERS           = 8    # 降至8线程，减少被限流/卡死概率
-MAX_RETRY             = 2    # 重试次数降为2，避免卡死请求长时间阻塞
-REQUEST_DELAY         = 0.1  # 每次成功请求后延迟（秒），防止限速
-SINGLE_STOCK_TIMEOUT  = 12   # 单股请求硬超时（秒），超时直接放弃
+SINGLE_STOCK_TIMEOUT  = 12   # 单请求硬超时（秒），超时直接放弃
 
 ROE_CACHE_DAYS_NORMAL       = 45
 ROE_CACHE_DAYS_REPORT_MONTH = 7
@@ -49,51 +48,53 @@ def build_industry_maps():
             ind2 = dict(zip(df['code'].str.zfill(6), df['industry_l2']))
     return ind1, ind2
 
-# ─── PE/PB 单股查询（雪球）───────────────────────────────────────────────
-def code_to_xq_symbol(code):
+# ─── PE/PB 批量查询（东财 push2，无需登录）───────────────────────────────
+def code_to_secid(code):
+    """A股代码 → 东财 secid（1.沪 / 0.深京，与 qscreen_data.mjs 的 secidFromCode 一致）"""
     c = str(code).zfill(6)
-    if c.startswith(('60', '68', '51', '11')): return 'SH' + c
-    elif c.startswith(('00', '30', '12', '15', '16')): return 'SZ' + c
-    elif c.startswith(('43', '83', '87', '88')): return 'BJ' + c
-    else: return 'SH' + c
+    mkt = '1' if c.startswith(('6', '9')) else '0'
+    return f'{mkt}.{c}'
 
-def fetch_one_xq(code):
+EM_PEPB_BATCH = 200  # push2 ulist 单次最多 200 只
+EM_PEPB_MAX_RETRY = 3  # 代理/网络间歇性失败时的重试次数
+
+def fetch_em_pepb_batch(codes):
     """
-    单股估值查询。通过 socket.setdefaulttimeout 给底层网络请求加真正的超时，
-    确保卡死请求在 SINGLE_STOCK_TIMEOUT 秒内被系统级中断，而不只是放弃等待。
+    批量抓取 PE/PB（东财 push2 ulist：f115=市盈率TTM、f23=市净率、f14=名称）。
+    无需登录，单批最多 EM_PEPB_BATCH 只；代理/网络波动时重试，最终失败抛错由调用方兜底。
+    返回 {code6: (name, pe_ttm, pb)}。
     """
-    if ak is None:
-        return code, '', None, None, 'akshare_missing'
-    symbol = code_to_xq_symbol(code)
-    old_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(SINGLE_STOCK_TIMEOUT)
-    try:
-        for attempt in range(MAX_RETRY):
-            try:
-                df = ak.stock_individual_spot_xq(symbol=symbol)
-                row = dict(zip(df['item'], df['value']))
-                pe_ttm = row.get('市盈率(TTM)')
-                pb     = row.get('市净率')
-                name   = row.get('名称', '')
-                try: pe_ttm = float(pe_ttm) if pe_ttm is not None else None
-                except: pe_ttm = None
-                try: pb = float(pb) if pb is not None else None
-                except: pb = None
-                time.sleep(REQUEST_DELAY)
-                return code, name, pe_ttm, pb, None
-            except socket.timeout:
-                # socket 层超时，直接放弃，不重试
-                return code, '', None, None, f'socket_timeout>{SINGLE_STOCK_TIMEOUT}s'
-            except Exception as e:
-                err_str = str(e)
-                if attempt < MAX_RETRY - 1:
-                    wait = 1.0 if 'Expecting value' in err_str else 0.3
-                    time.sleep(wait * (attempt + 1))
-                else:
-                    return code, '', None, None, err_str
-    finally:
-        socket.setdefaulttimeout(old_timeout)
-    return code, '', None, None, 'max_retry'
+    out = {}
+    secids = ','.join(code_to_secid(c) for c in codes)
+    fields = 'f12,f14,f115,f23'
+    url = (f'https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2'
+           f'&fields={fields}&secids={secids}')
+    last_err = None
+    for attempt in range(EM_PEPB_MAX_RETRY):
+        try:
+            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=SINGLE_STOCK_TIMEOUT)
+            r.raise_for_status()
+            diff = ((r.json() or {}).get('data') or {}).get('diff') or []
+            for it in diff:
+                code = str(it.get('f12') or '').zfill(6)
+                if not code:
+                    continue
+                name = str(it.get('f14') or '')
+                try:
+                    pe = float(it.get('f115')) if it.get('f115') not in (None, '-') else None
+                except (TypeError, ValueError):
+                    pe = None
+                try:
+                    pb = float(it.get('f23')) if it.get('f23') not in (None, '-') else None
+                except (TypeError, ValueError):
+                    pb = None
+                out[code] = (name, pe, pb)
+            return out
+        except Exception as e:
+            last_err = e
+            if attempt < EM_PEPB_MAX_RETRY - 1:
+                time.sleep(1.0 * (attempt + 1))  # 递增等待后重试
+    raise last_err
 
 # ─── ROE 缓存管理 ─────────────────────────────────────────────────────────
 def needs_roe_update():
@@ -327,9 +328,6 @@ def fetch_and_update_pepb(target_codes, ind1_map, ind2_map, pepb_cache_path=''):
     # 优先用 cached_codes（3天内缓存全量），其次 today_cached_codes（今日精确）
     already_have = cached_codes if cached_codes else today_cached_codes
     missing_codes = sorted(target_set - already_have)
-    if ak is None:
-        log('akshare 未安装，跳过 PE/PB 网络抓取，优先复用现有缓存')
-        missing_codes = []
     log(f'目标代码: {len(target_set)} 只，缓存命中: {len(target_set) - len(missing_codes)} 只，需抓取: {len(missing_codes)} 只')
 
     # ── 步骤2.5：全缓存命中，直接短路 ──
@@ -349,45 +347,46 @@ def fetch_and_update_pepb(target_codes, ind1_map, ind2_map, pepb_cache_path=''):
         log(f'全部目标代码命中缓存，直接复用缓存数据（{len(result)}只），跳过合并/重算/写盘')
         return result
 
-    # ── 步骤3：只抓缺失代码 ──
+    # ── 步骤3：只抓缺失代码（东财 push2，无需登录）──
     new_rows = []
     if missing_codes:
         errors = 0
         skipped_dirty = 0
         done = 0
         total = len(missing_codes)
-        log(f'开始抓取 {total} 只PE/PB（{MAX_WORKERS}线程，单股超时{SINGLE_STOCK_TIMEOUT}s）...')
+        batches = [missing_codes[i:i + EM_PEPB_BATCH] for i in range(0, len(missing_codes), EM_PEPB_BATCH)]
+        log(f'开始抓取 {total} 只PE/PB（东财push2，{MAX_WORKERS}线程，{len(batches)}批，单批{EM_PEPB_BATCH}只）...')
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-            fm = {ex.submit(fetch_one_xq, c): c for c in missing_codes}
-            for future in concurrent.futures.as_completed(fm, timeout=None):
+            fm = {ex.submit(fetch_em_pepb_batch, b): b for b in batches}
+            for future in concurrent.futures.as_completed(fm):
+                batch = fm[future]
                 try:
-                    # 每个 future 单独设硬超时，超时视为错误跳过
-                    code, name, pe_ttm, pb, err = future.result(timeout=SINGLE_STOCK_TIMEOUT)
-                except concurrent.futures.TimeoutError:
-                    errors += 1
-                    done += 1
+                    # 每批单独设硬超时（容纳内部重试），超时视为错误跳过
+                    batch_data = future.result(timeout=SINGLE_STOCK_TIMEOUT * (EM_PEPB_MAX_RETRY + 1))
+                except Exception:
+                    errors += len(batch)
+                    done += len(batch)
                     if done % 100 == 0 or done == total:
                         log(f'  进度: {done}/{total} 错误/超时:{errors} 过滤:{skipped_dirty}')
                     continue
-                except Exception as e:
-                    errors += 1
+                for code6 in batch:
                     done += 1
-                    continue
-                done += 1
-                if err:
-                    errors += 1
-                if done % 100 == 0 or done == total:
-                    log(f'  进度: {done}/{total} 错误/超时:{errors} 过滤:{skipped_dirty}')
-                c6 = str(code).zfill(6)
-                if not name or 'ST' in str(name) or '退' in str(name):
-                    skipped_dirty += 1
-                    continue
-                new_rows.append({
-                    'date': today, 'code': c6, 'name': name,
-                    'pe_ttm': pe_ttm, 'pb': pb,
-                    'industry_l1': ind1_map.get(c6, ''),
-                    'industry_l2': ind2_map.get(c6, ''),
-                })
+                    item = batch_data.get(code6)
+                    if item is None:
+                        errors += 1
+                    else:
+                        name, pe_ttm, pb = item
+                        if not name or 'ST' in str(name) or '退' in str(name):
+                            skipped_dirty += 1
+                            continue
+                        new_rows.append({
+                            'date': today, 'code': code6, 'name': name,
+                            'pe_ttm': pe_ttm, 'pb': pb,
+                            'industry_l1': ind1_map.get(code6, ''),
+                            'industry_l2': ind2_map.get(code6, ''),
+                        })
+                    if done % 100 == 0 or done == total:
+                        log(f'  进度: {done}/{total} 错误/超时:{errors} 过滤:{skipped_dirty}')
         log(f'本次抓取完成: 写入 {len(new_rows)} 只，错误/超时 {errors} 只，过滤 {skipped_dirty} 只')
     else:
         log('全部目标代码今日缓存命中，无需网络请求')
@@ -489,8 +488,6 @@ def main():
 
     # ── ROE 缓存 ──
     roe_map = {}
-    roe_future = None
-    roe_executor = None
 
     if not args.skipRoe:
         if ak is None:
@@ -504,16 +501,13 @@ def main():
             if needs_roe_update():
                 all_codes = get_all_codes()
                 if not os.path.exists(ROE_CACHE_FILE):
-                    # 首次初始化：改为后台异步，不阻塞 PE/PB 抓取
-                    # ROE 缺失时用空 map，筛选结果中 ROE 字段为 NaN，不影响主流程
-                    log(f'ROE首次初始化，后台拉取 {len(all_codes)} 只（不阻塞主流程）...')
-                    roe_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                    roe_future = roe_executor.submit(build_roe_cache, all_codes)
+                    # 首次初始化：daemon 后台线程拉取，主流程结束即随进程退出，绝不阻塞筛选
+                    log(f'ROE首次初始化，后台拉取 {len(all_codes)} 只（daemon线程，不阻塞主流程）...')
+                    threading.Thread(target=build_roe_cache, args=(all_codes,), daemon=True).start()
                 else:
                     roe_map = load_roe_cache()
-                    log(f'ROE缓存过期，加载旧缓存({len(roe_map)}只)，后台重建中...')
-                    roe_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                    roe_future = roe_executor.submit(build_roe_cache, all_codes)
+                    log(f'ROE缓存过期，加载旧缓存({len(roe_map)}只)，后台重建中（daemon线程）...')
+                    threading.Thread(target=build_roe_cache, args=(all_codes,), daemon=True).start()
             else:
                 roe_map = load_roe_cache()
                 valid_n = sum(1 for v in roe_map.values() if v is not None and str(v) != 'nan')
@@ -534,21 +528,16 @@ def main():
     df['roe_avg_3y'] = df['code'].map(roe_map)
     df['roe_avg_3y'] = pd.to_numeric(df['roe_avg_3y'], errors='coerce')
 
-    if roe_future is not None:
-        if roe_future.done():
-            roe_map = roe_future.result()
-            df['roe_avg_3y'] = df['code'].map(roe_map)
-            df['roe_avg_3y'] = pd.to_numeric(df['roe_avg_3y'], errors='coerce')
-            log('ROE后台重建完成，已更新')
-        else:
-            log('ROE后台重建仍在进行中，使用旧缓存值')
-        if roe_executor: roe_executor.shutdown(wait=False)
-
     out_path = os.path.abspath(args.out)
     df.to_csv(out_path, index=False, encoding='utf-8-sig')
     roe_valid = df['roe_avg_3y'].notna().sum() if 'roe_avg_3y' in df.columns else 0
     log(f'已保存 {out_path} ({len(df)}只)')
     log(f'ROE覆盖: {roe_valid}/{len(df)}只')
+
+    # 主流程已完成。ROE 后台重建线程内部还有非 daemon 的 ThreadPoolExecutor worker，
+    # 在网络受限时可能耗时数十分钟，若不强制退出会阻塞 Node 侧 execFileSync 无限等待。
+    # 输出文件与缓存均已同步写盘，这里直接退出进程（后台 ROE 重建非本次筛选必需）。
+    os._exit(0)
 
 
 if __name__ == '__main__':

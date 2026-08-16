@@ -8,6 +8,10 @@ import { runQscreen } from './qscreen_lib.mjs';
 const require = createRequire(import.meta.url);
 const { getPythonRuntime } = require('../common/runtime.js');
 
+// Step2 估值子进程硬超时（5 分钟）。Python 端任何非 daemon 阻塞都不会无限拖住筛选主流程，
+// 超时后抛错由下方 catch 兜底：回退旧估值文件或跳过估值规则。
+const VALUATION_TIMEOUT_MS = 5 * 60 * 1000;
+
 export async function runPass1({ rulesPath, codes, fastPoolPath, candidatesPath, cwd }) {
   console.log('\nStep1: K线量价筛选（pass1_fast json）...');
   const startedAt = Date.now();
@@ -60,14 +64,19 @@ export function runValuationStep({ pyScript, candidatesPath, candidateCodes, val
     const pyArgs = [pyScript, '--codesFile', candidatesPath, '--out', valSnapshotPath];
     const pyOut = execFileSync(pythonRuntime.command, pyArgs, {
       encoding: 'utf8',
-      timeout: 0,
+      timeout: VALUATION_TIMEOUT_MS,
       maxBuffer: 32 * 1024 * 1024,
       env: pythonRuntime.env,
     });
     valuationPyLog = String(pyOut ?? '');
     if (valuationPyLog.trim()) console.log(valuationPyLog.trim());
   } catch (e) {
-    console.warn('PE/PB查询失败（跳过估值规则）:', e.message);
+    const isTimeout = String(e?.code ?? '').toUpperCase() === 'ETIMEDOUT';
+    if (isTimeout) {
+      console.warn(`[警告] Step2 PE/PB查询超过 ${VALUATION_TIMEOUT_MS / 1000}s 仍未完成，已终止子进程`);
+    } else {
+      console.warn('PE/PB查询失败（跳过估值规则）:', e.message);
+    }
   }
 
   let valuationCacheHitRate = null;

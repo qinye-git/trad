@@ -144,6 +144,28 @@ npm start
 
 窗口标题：`A股量化筛选系统`。应用读取 `data/output` 结果并展示表格。
 
+### Step 8：创建桌面快捷方式（推荐）
+
+在桌面生成「A股量化筛选系统」快捷方式，双击即可启动（等效 `npm start`）：
+
+```powershell
+cd <项目根目录>
+$exe = Join-Path (Get-Location).Path 'node_modules\electron\dist\electron.exe'
+$ws = New-Object -ComObject WScript.Shell
+$desktop = [Environment]::GetFolderPath('Desktop')
+$lnk = $ws.CreateShortcut((Join-Path $desktop 'A股量化筛选系统.lnk'))
+$lnk.TargetPath = $exe
+$lnk.Arguments = '.'
+$lnk.WorkingDirectory = (Get-Location).Path
+$lnk.IconLocation = "$exe,0"
+$lnk.Description = 'A股量化筛选系统'
+$lnk.Save()
+Write-Output ("已创建: " + $lnk.FullPath)
+```
+
+> 快捷方式直接指向 `electron.exe`（参数 `.` + 工作目录为项目根），与 `npm start` 等效，
+> 且带 Electron 图标。若项目路径变化，重新执行本段命令即可刷新。
+
 ---
 
 ## 5. 验证清单

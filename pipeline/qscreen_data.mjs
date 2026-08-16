@@ -1,9 +1,42 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// 项目根固定由模块位置推导（pipeline/ 上一级），不依赖运行时 cwd，
+// 保证从任意目录启动也能正确定位 data/cache 等资源。
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function ensureFinite(n, fallback = null) {
   const x = Number(n);
   return Number.isFinite(x) ? x : fallback;
+}
+
+// 支持引号包裹字段的 CSV 行解析（兼容 pandas to_csv 默认 QUOTE_MINIMAL 输出：
+// 字段含逗号/引号时被 "..." 包裹，内部引号以 "" 转义）。字段内不换行。
+export function parseCsvLine(line) {
+  const out = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; }
+        else inQuotes = false;
+      } else {
+        cur += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ',') {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += c;
+    }
+  }
+  out.push(cur);
+  return out;
 }
 
 function uniq(arr) {
@@ -243,7 +276,7 @@ export async function fetchDailyKlineBySecid(secid, { klt = 101, fqt = 1, days =
 // 数据源可用性探测的记忆化：进程内缓存 + 短 TTL 落盘，避免每轮都发起探测请求。
 // 仅缓存成功结论；失败结论不缓存（失败会立即重探测，避免长时间沿用过期判断）。
 const PROBE_CACHE_TTL_MS = 10 * 60 * 1000;
-const PROBE_CACHE_FILE = path.join(process.cwd(), 'data', 'cache', 'eastmoney_probe.json');
+const PROBE_CACHE_FILE = path.join(PROJECT_ROOT, 'data', 'cache', 'eastmoney_probe.json');
 let _probeMem = null; // { at, result }
 let _probeDiskLoaded = false;
 
@@ -373,10 +406,10 @@ export function loadValuationSnapshot(dirOrFile) {
   if (!fs.existsSync(p)) return new Map();
   const lines = fs.readFileSync(p, 'utf8').split('\n');
   if (lines.length < 2) return new Map();
-  const headers = lines[0].split(',').map(h => h.trim().replace(/^\uFEFF/, ''));
+  const headers = parseCsvLine(lines[0]).map(h => h.trim().replace(/^\uFEFF/, ''));
   const map = new Map();
   for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(',');
+    const cols = parseCsvLine(lines[i]);
     if (cols.length < 2) continue;
     const row = {};
     headers.forEach((h, j) => { row[h] = cols[j]?.trim() ?? ''; });

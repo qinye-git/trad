@@ -1,4 +1,21 @@
 import fs from 'node:fs';
+import path from 'node:path';
+
+// 原子写盘：先写同目录临时文件再 rename 替换，避免进程崩溃留下半截文件。
+// 同目录 rename 在 POSIX 与 Windows（MoveFileEx）均为原子替换。
+function writeFileAtomic(filePath, data) {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `.${path.basename(filePath)}.${process.pid}.tmp`);
+  fs.writeFileSync(tmp, data, 'utf8');
+  try {
+    fs.renameSync(tmp, filePath);
+  } catch (e) {
+    // rename 失败（目标被占用等极端情况）时回退直接写，保证任务不整体失败
+    try { fs.unlinkSync(tmp); } catch {}
+    fs.writeFileSync(filePath, data, 'utf8');
+  }
+}
 
 export function buildPipelineMeta({ isPhase2, totalElapsedMs, timingUniverseMs, timingPass1Ms, timingValuationMs, timingStep3Ms, securityMasterCacheHit, valuationCacheHitRate }) {
   return {
@@ -27,7 +44,7 @@ export function writeResultWithMeta({ outPath, js, pipelineMeta }) {
     ...(js.pipeline_meta ?? {}),
     ...pipelineMeta,
   };
-  fs.writeFileSync(outPath, JSON.stringify(js, null, 2), 'utf8');
+  writeFileAtomic(outPath, JSON.stringify(js, null, 2));
 }
 
 export function writeResultMeta({ metaPath, js }) {
@@ -47,7 +64,7 @@ export function writeResultMeta({ metaPath, js }) {
     picked_count: Array.isArray(js?.picked) ? js.picked.length : null,
     picked: Array.isArray(js?.picked) ? js.picked : [],
   };
-  fs.writeFileSync(metaPath, JSON.stringify(meta), 'utf8');
+  writeFileAtomic(metaPath, JSON.stringify(meta));
 }
 
 export function writeSummary({ summaryPath, js, isPhase2, codesCount, fastCount, rankedCount, topCount, llmCount, picked }) {
@@ -73,7 +90,7 @@ export function writeSummary({ summaryPath, js, isPhase2, codesCount, fastCount,
     lines.push('当前规则下无标的通过筛选，建议降低minScore或放宽硬过滤条件。');
   }
 
-  fs.writeFileSync(summaryPath, lines.join('\n') + '\n', 'utf8');
+  writeFileAtomic(summaryPath, lines.join('\n') + '\n');
 }
 
 export function appendBacktestLog({ btLogPath, tradeDate, isPhase2, js, codesCount, fastCount, rankedCount, topCount, picked, pipelineMeta }) {

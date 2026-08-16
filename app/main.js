@@ -2,9 +2,10 @@ const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const { StringDecoder } = require('string_decoder');
 const { getNodeRuntime } = require('../common/runtime.js');
+const { todayCN } = require('../common/date.js');
 
 let mainWindow;
 const ROOT_DIR = path.join(__dirname, '..');
@@ -14,34 +15,10 @@ const OUTPUT_DIR = path.join(ROOT_DIR, 'data', 'output');
 const SCRIPTS_DIR = path.join(ROOT_DIR, 'scripts');
 const RULES_FILE = path.join(CONFIG_DIR, '量化筛选限制.txt');
 const RULES_OVERRIDE_FILE = path.join(CONFIG_DIR, '_rules_override.json');
-const DEBUG_ENV_FILE = path.join(ROOT_DIR, '.dbg', 'screen-run-code-minus1.env');
 
 fs.mkdirSync(CONFIG_DIR, { recursive: true });
 fs.mkdirSync(INPUT_DIR, { recursive: true });
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-
-function reportDebugEvent(hypothesisId, location, msg, data) {
-  let debugUrl = 'http://127.0.0.1:7777/event';
-  let sessionId = 'screen-run-code-minus1';
-  try {
-    const envText = fs.readFileSync(DEBUG_ENV_FILE, 'utf8');
-    debugUrl = envText.match(/DEBUG_SERVER_URL=(.+)/)?.[1]?.trim() || debugUrl;
-    sessionId = envText.match(/DEBUG_SESSION_ID=(.+)/)?.[1]?.trim() || sessionId;
-  } catch {}
-  fetch(debugUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      sessionId,
-      runId: 'pre-fix',
-      hypothesisId,
-      location,
-      msg,
-      data,
-      ts: Date.now(),
-    }),
-  }).catch(() => {});
-}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -82,6 +59,46 @@ function saveOverride(params) {
   fs.writeFileSync(RULES_OVERRIDE_FILE, JSON.stringify(params, null, 2), 'utf8');
 }
 
+// save-params 服务端白名单校验：未知字段丢弃，已知字段做类型/范围钳制，
+// 防止通过 IPC 注入任意字符串（YAML 注入 → 规则 eval 任意代码）。
+const PARAM_SCHEMA = {
+  beat_benchmark_threshold: { type: 'number', min: -0.2, max: 0.2 },
+  up_days_10d_min:         { type: 'integer', min: 0, max: 20 },
+  adv5_vol_ratio_min:      { type: 'number', min: 0.1, max: 10 },
+  adv5_vol_ratio_max:      { type: 'number', min: 0.1, max: 10 },
+  above_ma20:              { type: 'boolean' },
+  min_grade:               { type: 'enum', values: ['A', 'B', 'C'] },
+  min_score:               { type: 'integer', min: 1, max: 8 },
+};
+
+function sanitizeParams(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [key, spec] of Object.entries(PARAM_SCHEMA)) {
+    const v = raw[key];
+    if (v === undefined || v === null) continue;
+    switch (spec.type) {
+      case 'number': {
+        const n = Number(v);
+        if (Number.isFinite(n)) out[key] = Math.min(spec.max, Math.max(spec.min, n));
+        break;
+      }
+      case 'integer': {
+        const n = Math.round(Number(v));
+        if (Number.isFinite(n)) out[key] = Math.min(spec.max, Math.max(spec.min, n));
+        break;
+      }
+      case 'boolean':
+        out[key] = v === true || v === 'true';
+        break;
+      case 'enum':
+        if (spec.values.includes(v)) out[key] = v;
+        break;
+    }
+  }
+  return out;
+}
+
 function applyOverrideToRules(params) {
   const TEMPLATE_FILE = path.join(CONFIG_DIR, '量化筛选限制_template.txt');
   let tmpl = fs.readFileSync(TEMPLATE_FILE, 'utf8');
@@ -120,7 +137,7 @@ ipcMain.handle('get-status', () => {
     codesDate = stat.mtime.toISOString().slice(0, 10);
     codesCount = fs.readFileSync(codesFile, 'utf8').split('\n').filter(s => /^\d{6}$/.test(s.trim())).length;
   }
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayCN();
   const codesStale = codesDate && codesDate !== today;
   let summary = null;
   if (fs.existsSync(summaryFile)) summary = fs.readFileSync(summaryFile, 'utf8');
@@ -189,9 +206,10 @@ ipcMain.handle('get-status', () => {
 
 ipcMain.handle('save-params', (event, params) => {
   try {
-    saveOverride(params);
-    applyOverrideToRules(params);
-    return { ok: true };
+    const clean = sanitizeParams(params);
+    saveOverride(clean);
+    applyOverrideToRules(clean);
+    return { ok: true, params: clean };
   } catch(e) {
     return { ok: false, error: e.message };
   }
@@ -204,20 +222,11 @@ function runScript(scriptName, extraArgs, replyChannel) {
   const candidateInRoot = path.join(ROOT_DIR, scriptName);
   const scriptPath = fs.existsSync(candidateInScripts) ? candidateInScripts : candidateInRoot;
   const runtime = getNodeRuntime();
-  // #region debug-point A:spawn-start
-  reportDebugEvent('A', 'app/main.js:runScript:spawn-start', '[DEBUG] Starting child process', {
-    replyChannel,
-    scriptName,
-    scriptPath,
-    cwd: ROOT_DIR,
-    nodeInPath: String(process.env.Path || process.env.PATH || '').toLowerCase().includes('node'),
-    processExecPath: process.execPath,
-    runtimeCommand: runtime.command,
-  });
-  // #endregion
   const child = spawn(runtime.command, [scriptPath, ...extraArgs], {
     cwd: ROOT_DIR,
     env: runtime.env,
+    // 非 Windows 下创建新进程组，取消任务时可整组终止（负 pid SIGKILL）
+    detached: process.platform !== 'win32',
   });
   let stdoutBuf = '';
   const stdoutDecoder = new StringDecoder('utf8');
@@ -248,28 +257,9 @@ function runScript(scriptName, extraArgs, replyChannel) {
     if (stderrBuf) mainWindow.webContents.send(replyChannel + '-log', '[stderr] ' + stderrBuf);
   });
   child.on('close', code => {
-    // #region debug-point C:spawn-close
-    reportDebugEvent('C', 'app/main.js:runScript:close', '[DEBUG] Child process closed', {
-      replyChannel,
-      scriptName,
-      scriptPath,
-      code,
-    });
-    // #endregion
     mainWindow.webContents.send(replyChannel + '-done', { code });
   });
   child.on('error', err => {
-    // #region debug-point B:spawn-error
-    reportDebugEvent('B', 'app/main.js:runScript:error', '[DEBUG] Child process failed to start', {
-      replyChannel,
-      scriptName,
-      scriptPath,
-      errorMessage: err?.message ?? null,
-      errorCode: err?.code ?? null,
-      errorName: err?.name ?? null,
-      spawnfile: err?.path ?? null,
-    });
-    // #endregion
     mainWindow.webContents.send(replyChannel + '-done', { code: -1, error: err.message });
   });
   return child;
@@ -277,26 +267,42 @@ function runScript(scriptName, extraArgs, replyChannel) {
 
 let currentChild = null;
 
+// 取消任务时连带终止子进程树。qscreen_all_a.mjs 内部通过 execFileSync 再起的
+// Python 孙进程（Step2 估值、build_security_master）不会因父进程 kill 而退出，
+// 需按进程树清理，避免孤儿进程继续占网络/CPU。
+function killProcessTree(child) {
+  if (!child || typeof child.pid !== 'number') return;
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    } catch {}
+  } else {
+    // 非 Windows：spawn 时 detached 创建了新进程组，负 pid 杀整组
+    try { process.kill(-child.pid, 'SIGKILL'); } catch {}
+  }
+  try { child.kill(); } catch {}
+}
+
 ipcMain.on('update-codes', () => {
-  if (currentChild) { currentChild.kill(); currentChild = null; }
+  if (currentChild) { killProcessTree(currentChild); currentChild = null; }
   currentChild = runScript('gen_codes.mjs', [], 'update-codes');
   currentChild.on('close', () => { currentChild = null; });
 });
 
 ipcMain.on('run-screen', () => {
-  if (currentChild) { currentChild.kill(); currentChild = null; }
+  if (currentChild) { killProcessTree(currentChild); currentChild = null; }
   currentChild = runScript('qscreen_all_a.mjs', ['--skipFetch', 'true'], 'run-screen');
   currentChild.on('close', () => { currentChild = null; });
 });
 
 ipcMain.on('run-screen-full', () => {
-  if (currentChild) { currentChild.kill(); currentChild = null; }
+  if (currentChild) { killProcessTree(currentChild); currentChild = null; }
   currentChild = runScript('qscreen_all_a.mjs', ['--forceRefresh', 'true'], 'run-screen-full');
   currentChild.on('close', () => { currentChild = null; });
 });
 
 ipcMain.on('cancel-task', () => {
-  if (currentChild) { currentChild.kill(); currentChild = null; }
+  if (currentChild) { killProcessTree(currentChild); currentChild = null; }
 });
 
 ipcMain.handle('fetch-index-quote', () => {

@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://hq.sinajs.cn https://finance.sina.com.cn;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://hq.sinajs.cn https://finance.sina.com.cn;">
 <title>A股量化筛选系统</title>
 <style>*{margin:0;padding:0;box-sizing:border-box;}
 :root{
@@ -126,10 +126,10 @@ tr:hover td{background:rgba(88,166,255,.04);}
 <div class="sidebar">
   <div class="side-section">
     <div class="side-title">筛选操作</div>
-    <button class="btn primary" id="btn-screen" onclick="runScreen()">▶ 开始筛选</button>
-    <button class="btn" id="btn-screen-full" onclick="runScreenFull()">↻ 更新池并筛选</button>
-    <button class="btn" id="btn-update" onclick="updateCodes()">↓ 仅更新股票池</button>
-    <button class="btn danger disabled" id="btn-cancel" onclick="cancelTask()">■ 停止任务</button>
+    <button class="btn primary" id="btn-screen">▶ 开始筛选</button>
+    <button class="btn" id="btn-screen-full">↻ 更新池并筛选</button>
+    <button class="btn" id="btn-update">↓ 仅更新股票池</button>
+    <button class="btn danger disabled" id="btn-cancel">■ 停止任务</button>
   </div>
 
   <div class="side-section">
@@ -162,40 +162,40 @@ tr:hover td{background:rgba(88,166,255,.04);}
   <div class="side-section">
     <div class="side-title">筛选模式</div>
     <div class="mode-switch">
-      <div class="mode-btn" id="mode-strict" onclick="applyPreset('strict')">严格</div>
-      <div class="mode-btn" id="mode-normal" onclick="applyPreset('normal')">标准</div>
-      <div class="mode-btn active" id="mode-loose" onclick="applyPreset('loose')">宽松</div>
+      <div class="mode-btn" id="mode-strict">严格</div>
+      <div class="mode-btn" id="mode-normal">标准</div>
+      <div class="mode-btn active" id="mode-loose">宽松</div>
     </div>
     <div class="param-group">
       <div class="param-label"><span>跑赢基准（%）</span><span class="param-val" id="v-benchmark"></span></div>
-      <input type="range" id="r-benchmark" min="-3" max="5" step="0.5" oninput="syncUI()">
+      <input type="range" id="r-benchmark" min="-3" max="5" step="0.5">
     </div>
     <div class="param-group">
       <div class="param-label"><span>10日上涨天数 ≥</span><span class="param-val" id="v-updays"></span></div>
-      <input type="range" id="r-updays" min="1" max="9" step="1" oninput="syncUI()">
+      <input type="range" id="r-updays" min="1" max="9" step="1">
     </div>
     <div class="param-group">
       <div class="param-label"><span>量比下限</span><span class="param-val" id="v-volmin"></span></div>
-      <input type="range" id="r-volmin" min="0.5" max="1.5" step="0.05" oninput="syncUI()">
+      <input type="range" id="r-volmin" min="0.5" max="1.5" step="0.05">
     </div>
     <div class="param-group">
       <div class="param-label"><span>量比上限</span><span class="param-val" id="v-volmax"></span></div>
-      <input type="range" id="r-volmax" min="1.0" max="4.0" step="0.1" oninput="syncUI()">
+      <input type="range" id="r-volmax" min="1.0" max="4.0" step="0.1">
     </div>
     <div class="param-group">
       <div class="param-label"><span>最低得分 ≥</span><span class="param-val" id="v-score"></span></div>
-      <input type="range" id="r-score" min="0" max="6" step="1" oninput="syncUI()">
+      <input type="range" id="r-score" min="0" max="6" step="1">
     </div>
     <div class="toggle-row">
       <span>要求站上MA20</span>
-      <label class="toggle"><input type="checkbox" id="t-ma20" onchange="syncUI()"><span class="toggle-slider"></span></label>
+      <label class="toggle"><input type="checkbox" id="t-ma20"><span class="toggle-slider"></span></label>
     </div>
     <div class="param-label" style="margin-bottom:5px">最低评级</div>
-    <select class="grade-select" id="s-grade" onchange="syncUI()">
+    <select class="grade-select" id="s-grade">
       <option value="A">A级（成交额≥500万）</option>
       <option value="B" selected>B级（含低流动性）</option>
     </select>
-    <button class="apply-btn" onclick="saveParams()">✓ 应用参数</button>
+    <button class="apply-btn" id="apply-btn">✓ 应用参数</button>
     <div class="save-hint" id="save-hint"></div>
   </div>
 
@@ -213,16 +213,16 @@ tr:hover td{background:rgba(88,166,255,.04);}
       <div class="info-row"><span class="info-key">缓存命中(K/V/R)</span><span class="info-val" id="pm-cache" style="font-size:10px">--</span></div>
       <div class="info-row"><span class="info-key">阶段耗时(U/P1/V/P2/L/A)</span><span class="info-val" id="pm-timing" style="font-size:10px">--</span></div>
     </div>
-    <button class="btn" onclick="openResultFile()" style="margin-top:8px;font-size:11px">↗ 用系统程序打开摘要</button>
-    <button class="btn" onclick="viewSummaryInApp()" style="font-size:11px">☰ 在窗口内查看摘要</button>
+    <button class="btn" id="btn-open-result" style="margin-top:8px;font-size:11px">↗ 用系统程序打开摘要</button>
+    <button class="btn" id="btn-view-summary" style="font-size:11px">☰ 在窗口内查看摘要</button>
   </div>
 </div>
 
 <div class="main">
   <div class="tabs">
-    <div class="tab active" id="tab-btn-results" onclick="switchTab('results')">筛选结果 <span class="tab-badge" id="badge-results">0</span></div>
-    <div class="tab" id="tab-btn-log" onclick="switchTab('log')">运行日志</div>
-    <div class="tab" id="tab-btn-summary" onclick="switchTab('summary')">摘要报告</div>
+    <div class="tab active" id="tab-btn-results">筛选结果 <span class="tab-badge" id="badge-results">0</span></div>
+    <div class="tab" id="tab-btn-log">运行日志</div>
+    <div class="tab" id="tab-btn-summary">摘要报告</div>
   </div>
   <div class="tab-content active" id="tab-results">
     <div class="results-wrap">

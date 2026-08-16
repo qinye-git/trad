@@ -3,6 +3,7 @@ import { buildRunContext } from './pipeline/context.mjs';
 import { prepareUniverse } from './pipeline/universe.mjs';
 import { runPass1, runValuationStep, runPass3 } from './pipeline/stages.mjs';
 import { buildPipelineMeta, writeResultWithMeta, writeResultMeta, writeSummary, appendBacktestLog } from './pipeline/reporting.mjs';
+import { todayCN } from './common/date.js';
 
 async function main() {
   const args = parseArgs(process.argv);
@@ -73,7 +74,7 @@ async function main() {
     picked: step3Result.picked,
   });
 
-  const tradeDate = new Date().toISOString().slice(0, 10);
+  const tradeDate = todayCN();
   appendBacktestLog({
     btLogPath: ctx.btLogPath,
     tradeDate,

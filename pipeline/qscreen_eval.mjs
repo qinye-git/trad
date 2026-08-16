@@ -1,3 +1,46 @@
+// 规则表达式只允许「数据字段 + 数学/比较/逻辑运算符」，禁止任何可触及运行时的标识符。
+// 阻断原型链（constructor/prototype/__proto__）与全局对象（process/require/eval/...），
+// 防止参数注入或规则内容被当成任意 JS 执行。
+const FORBIDDEN_IDENTS = new Set([
+  'constructor', 'prototype', '__proto__', '__defineGetter__', '__defineSetter__',
+  'Function', 'eval', 'globalThis', 'window', 'global', 'process', 'require', 'import',
+  'module', 'exports', 'this', 'arguments', 'Symbol', 'Reflect', 'Proxy',
+]);
+const IDENT_RE = /[A-Za-z_$][A-Za-z0-9_$]*/g;
+
+function assertSafeExpr(expr) {
+  const text = String(expr ?? '');
+  // 1) 标识符黑名单
+  for (const m of text.matchAll(IDENT_RE)) {
+    if (FORBIDDEN_IDENTS.has(m[0])) {
+      throw new Error(`rule 表达式包含禁止标识符: ${m[0]}`);
+    }
+  }
+  // 2) 字符白名单：数字/字符串/布尔/null/标识符/运算符/括号/逗号/点/引号
+  const clean = text.replace(/"[^"]*"/g, '""').replace(/'[^']*'/g, "''");
+  if (!/^[\s\d+\-*/%<>=!&|(),.:'"A-Za-z_$]+$/.test(clean)) {
+    throw new Error('rule 表达式包含非法字符');
+  }
+  if (text.includes('=>')) {
+    throw new Error('rule 表达式不允许箭头函数');
+  }
+  return true;
+}
+
+// ctx 只暴露自有数据字段：阻断原型链属性（constructor 等）与 undefined 兜底
+function makeCtxProxy(ctx) {
+  return new Proxy(ctx, {
+    has(t, k) {
+      return typeof k === 'string' && Object.prototype.hasOwnProperty.call(t, k);
+    },
+    get(t, k) {
+      if (typeof k !== 'string' || !Object.prototype.hasOwnProperty.call(t, k)) return undefined;
+      const v = Reflect.get(t, k, t);
+      return typeof v === 'function' ? v.bind(t) : v;
+    },
+  });
+}
+
 function evalRule(expr, ctx) {
   const safe = String(expr)
     .replace(/\bAND\b/g, '&&')
@@ -5,8 +48,10 @@ function evalRule(expr, ctx) {
     .replace(/\bNOT\b/g, '!')
     .replace(/\babs\s*\(/g, 'Math.abs(');
 
+  assertSafeExpr(safe);
+
   const fn = new Function('ctx', `with (ctx) { return (${safe}); }`);
-  return !!fn(ctx);
+  return !!fn(makeCtxProxy(ctx));
 }
 
 export function evalRuleSafe(expr, ctx) {

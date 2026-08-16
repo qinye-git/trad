@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { loadCodeList, writeCodeList } from './io.mjs';
 import { runQscreen } from './qscreen_lib.mjs';
+import { todayCN } from '../common/date.js';
 
 // 统一运行时定位：Node/Python 解释器解析与 UTF-8 编码环境都走 common/runtime.js
 const require = createRequire(import.meta.url);
@@ -93,7 +94,7 @@ export function runValuationStep({ pyScript, candidatesPath, candidateCodes, val
 
   if (!fs.existsSync(valSnapshotPath) && finalValPath) {
     const valStat = fs.statSync(finalValPath);
-    const valDate = valStat.mtime.toISOString().slice(0, 10);
+    const valDate = todayCN(valStat.mtime);
     console.warn(`[警告] Step2 PE/PB抓取失败，回退使用旧估值文件: ${finalValPath}`);
     console.warn(`[警告] 旧估值文件日期: ${valDate}，今日: ${today}，估值数据可能已漂移`);
   } else if (!finalValPath) {

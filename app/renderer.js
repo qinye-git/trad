@@ -25,6 +25,8 @@ const PRESETS={
   loose:{beat_benchmark_threshold:-0.01,up_days_10d_min:4,adv5_vol_ratio_min:0.80,adv5_vol_ratio_max:3.00,above_ma20:false,min_score:1,min_grade:'B'},
 };
 function fmtAmt(v){const n=Number(v);if(!isFinite(n)||!v)return'--';if(n>=1e8)return(n/1e8).toFixed(2)+'亿';if(n>=1e4)return(n/1e4).toFixed(0)+'万';return n.toFixed(0);}
+// HTML 转义：所有外部数据（股票名/行业/代码等）在拼入 innerHTML 前必须经过此函数
+const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function switchTab(name){
   ['results','log','summary'].forEach(t=>{
     const btn=document.getElementById('tab-btn-'+t);
@@ -163,7 +165,7 @@ function renderResults(picked,summary){
   document.getElementById('results-content').style.display='block';
   const asof=summary?(summary.match(/时间: (.+)/)||['',''])[1]:'';
   const bench=summary?(summary.match(/基准: (.+)/)||['',''])[1]:'';
-  document.getElementById('result-meta').innerHTML='<div class=chip>入选 <b>'+picked.length+'</b> 只</div>'+(asof?'<div class=chip>'+asof+'</div>':'')+(bench?'<div class="chip green"><b>'+bench+'</b></div>':'');
+  document.getElementById('result-meta').innerHTML='<div class=chip>入选 <b>'+esc(picked.length)+'</b> 只</div>'+(asof?'<div class=chip>'+esc(asof)+'</div>':'')+(bench?'<div class="chip green"><b>'+esc(bench)+'</b></div>':'');
   document.getElementById('results-tbody').innerHTML=picked.map((x,i)=>{
     const score=Number(x.score)||0;
     const ex=((Number(x.metrics&&x.metrics.ret_5d||0)-Number(x.metrics&&x.metrics.idx_ret_5d||0))*100);
@@ -171,6 +173,12 @@ function renderResults(picked,summary){
     const industry=(x.metrics&&x.metrics.industry_l2)||(x.metrics&&x.metrics.industry_l1)||'--';
     const industryL1=(x.metrics&&x.metrics.industry_l1)||'';
     const industryTitle=industryL1&&industryL1!==industry?industryL1+' > '+industry:industry;
+    // 外部字段统一转义（名称/行业/代码/评级），防 XSS
+    const code=esc(x.code);
+    const name=esc(x.name||'--');
+    const grade=esc(x.grade||'');
+    const industryE=esc(industry);
+    const industryTitleE=esc(industryTitle);
     const priceRaw=window._liveQuotes&&window._liveQuotes[x.code];
     const price=priceRaw?priceRaw.price:(x.metrics&&x.metrics.close)||0;
     const pct=priceRaw?priceRaw.pct:Number((x.metrics&&x.metrics.pct_1d) ?? NaN);
@@ -183,12 +191,12 @@ function renderResults(picked,summary){
               ? '<span class=up style="color:var(--red)">▲'+Math.abs(pct*100).toFixed(2)+'%</span>'
               : '<span class=dn style="color:var(--green)">▼'+Math.abs(pct*100).toFixed(2)+'%</span>'))
       : '--';
-    const priceCell='<span class="price-cell"'+( Number.isFinite(pct)?(isFlat?' style="color:var(--text2)"':(pct>0?' style="color:var(--red)"':' style="color:var(--green)"')):'' )+' data-code="'+x.code+'">'+priceStr+'</span> <span class="'+(Number.isFinite(pct)?(isFlat?'':(pct>0?'up':'dn')):'')+'">'+pctStr+'</span>';
+    const priceCell='<span class="price-cell"'+( Number.isFinite(pct)?(isFlat?' style="color:var(--text2)"':(pct>0?' style="color:var(--red)"':' style="color:var(--green)"')):'' )+' data-code="'+code+'">'+priceStr+'</span> <span class="'+(Number.isFinite(pct)?(isFlat?'':(pct>0?'up':'dn')):'')+'">'+pctStr+'</span>';
     const cl=x.metrics&&x.metrics.close;const ma=x.metrics&&x.metrics.MA20;
     const maStr=(!cl||!ma)?'--':(cl>ma?'<span class=up>✓</span>':'<span class=dn>✗</span>');
     const adv=x.metrics&&x.metrics.ADV5_amount;const n=Number(adv);let amtStr='--';
     if(isFinite(n)&&n){if(n>=1e8)amtStr=(n/1e8).toFixed(2)+'亿';else if(n>=1e4)amtStr=(n/1e4).toFixed(0)+'万';else amtStr=n.toFixed(0);}
-    return '<tr><td style="color:var(--text3);font-size:11px">'+(i+1)+'</td><td><span class=code-cell>'+x.code+'</span></td><td>'+(x.name||'--')+'</td><td><span class="grade-badge '+x.grade+'">'+x.grade+'</span></td><td><div class=score-wrap>'+score.toFixed(1)+'<div class=score-track><div class=score-fill style="width:'+Math.min(100,score/8*100)+'%"></div></div></div></td><td>'+priceCell+'</td><td>'+exStr+'</td><td>'+amtStr+'</td><td>'+maStr+'</td><td><span class=industry-tag title="'+industryTitle+'">'+industry+'</span></td></tr>';
+    return '<tr><td style="color:var(--text3);font-size:11px">'+(i+1)+'</td><td><span class=code-cell>'+code+'</span></td><td>'+name+'</td><td><span class="grade-badge '+grade+'">'+grade+'</span></td><td><div class=score-wrap>'+score.toFixed(1)+'<div class=score-track><div class=score-fill style="width:'+Math.min(100,score/8*100)+'%"></div></div></div></td><td>'+priceCell+'</td><td>'+exStr+'</td><td>'+amtStr+'</td><td>'+maStr+'</td><td><span class=industry-tag title="'+industryTitleE+'">'+industryE+'</span></td></tr>';
   }).join('');
 }
 function appendLog(text){
@@ -344,9 +352,13 @@ async function fetchLiveQuotes(){
     const res=await window.api.fetchStockQuotes(window._pickedCodes);
     if(!res.ok||!res.quotes)return;
     window._liveQuotes=res.quotes;
-    // 更新已渲染的行
+    // 更新已渲染的行（用 getAttribute 取解码后的原始 code 匹配，兼容转义后的 data-code 属性）
     for(const [code,q] of Object.entries(res.quotes)){
-      const el=document.querySelector('.price-cell[data-code="'+code+'"]');
+      let el=null;
+      const cells=document.querySelectorAll('.price-cell');
+      for(let i=0;i<cells.length;i++){
+        if(cells[i].getAttribute('data-code')===code){el=cells[i];break;}
+      }
       if(!el)continue;
       el.textContent=q.price>0?q.price.toFixed(2):'--';
       const isFlat=Math.abs(q.pct)<1e-8;
@@ -401,3 +413,29 @@ window.renderResults=function(picked,summary){
 initParams();
 refreshStatus();
 setInterval(()=>{document.getElementById('bottom-time').textContent=new Date().toLocaleString('zh-CN');},1000);
+
+// 事件绑定：CSP 已收紧（script-src 'self'，无 unsafe-inline），全部改为 addEventListener
+function bindUI(){
+  const on=(id,ev,fn)=>{const el=document.getElementById(id);if(el)el.addEventListener(ev,fn);};
+  on('btn-screen','click',runScreen);
+  on('btn-screen-full','click',runScreenFull);
+  on('btn-update','click',updateCodes);
+  on('btn-cancel','click',cancelTask);
+  on('mode-strict','click',()=>applyPreset('strict'));
+  on('mode-normal','click',()=>applyPreset('normal'));
+  on('mode-loose','click',()=>applyPreset('loose'));
+  on('r-benchmark','input',syncUI);
+  on('r-updays','input',syncUI);
+  on('r-volmin','input',syncUI);
+  on('r-volmax','input',syncUI);
+  on('r-score','input',syncUI);
+  on('t-ma20','change',syncUI);
+  on('s-grade','change',syncUI);
+  on('apply-btn','click',saveParams);
+  on('tab-btn-results','click',()=>switchTab('results'));
+  on('tab-btn-log','click',()=>switchTab('log'));
+  on('tab-btn-summary','click',()=>switchTab('summary'));
+  on('btn-open-result','click',openResultFile);
+  on('btn-view-summary','click',viewSummaryInApp);
+}
+bindUI();

@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { loadCodeList, writeCodeList } from './io.mjs';
 import { genCandidates, sinaScan } from './stock_pool.mjs';
 import { loadSecurityMasterInfo } from './security_master.mjs';
+import { todayCN } from '../common/date.js';
 
 // 统一运行时定位：与 stages.mjs 共用 common/runtime.js
 const require = createRequire(import.meta.url);
@@ -37,7 +38,7 @@ async function fetchAllACodes(cwd) {
   const master = loadSecurityMasterInfo(cwd);
 
   if (master.codes.length > 100) {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayCN();
     const isToday = master.updated === today;
     console.log('\n========== 股票池来源 ==========');
     console.log('来源:         security_master.csv');
@@ -65,7 +66,7 @@ function needsMasterUpdate(cwd, today) {
 function codesFileIsToday(codesOut, today) {
   if (!fs.existsSync(codesOut)) return false;
   const mtime = fs.statSync(codesOut).mtime;
-  return mtime.toISOString().slice(0, 10) === today;
+  return todayCN(mtime) === today;
 }
 
 export async function prepareUniverse({ cwd, codesOut, skip, forceRefresh, today }) {

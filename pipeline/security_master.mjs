@@ -2,6 +2,7 @@
 // 失效键：mtimeMs + 文件大小，避免同一进程内对同一 CSV 多次整表读取解析。
 import fs from 'node:fs';
 import path from 'node:path';
+import { parseCsvLine } from './qscreen_data.mjs';
 
 let _cacheKey = null;
 let _cacheData = null;
@@ -15,7 +16,7 @@ export function loadSecurityMasterInfo(cwd) {
   if (_cacheKey === key && _cacheData) return _cacheData;
 
   const lines = fs.readFileSync(p, 'utf8').split('\n');
-  const header = (lines[0] ?? '').split(',').map((s) => s.trim().replace(/^\uFEFF/, ''));
+  const header = parseCsvLine(lines[0] ?? '').map((s) => s.trim().replace(/^\uFEFF/, ''));
   const codeIdx = header.findIndex((h) => h === 'code');
   const nameIdx = header.findIndex((h) => h === 'name');
   const updIdx = header.findIndex((h) => h === 'updated');
@@ -24,7 +25,7 @@ export function loadSecurityMasterInfo(cwd) {
   const nameMap = new Map();
   if (codeIdx !== -1 && nameIdx !== -1) {
     for (let i = 1; i < lines.length; i++) {
-      const parts = lines[i].split(',');
+      const parts = parseCsvLine(lines[i]);
       const code = parts[codeIdx]?.trim();
       const name = parts[nameIdx]?.trim();
       if (!code) continue;
@@ -32,7 +33,7 @@ export function loadSecurityMasterInfo(cwd) {
       if (/^[036]\d{5}$/.test(code)) codes.push(code);
     }
   }
-  const updated = updIdx !== -1 ? lines[1]?.split(',')?.[updIdx]?.trim() : '';
+  const updated = updIdx !== -1 ? parseCsvLine(lines[1] ?? '')[updIdx]?.trim() : '';
 
   _cacheKey = key;
   _cacheData = { codes, nameMap, updated };

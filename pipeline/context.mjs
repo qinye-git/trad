@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { todayCN } from '../common/date.js';
 
 export function buildRunContext({ args, cwd }) {
   const dataInputDir = path.resolve(path.join(cwd, 'data', 'input'));
@@ -32,7 +33,7 @@ export function buildRunContext({ args, cwd }) {
   const isPhase2 = phaseRaw === '2' || phaseRaw === 'phase2';
   const skip = String(args.skipFetch || 'false') === 'true';
   const forceRefresh = String(args.forceRefresh || 'false') === 'true';
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayCN();
 
   return {
     rulesPath,

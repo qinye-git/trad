@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
+const zlib = require('zlib');
 const { spawn, execFileSync } = require('child_process');
 const { StringDecoder } = require('string_decoder');
 const { getNodeRuntime } = require('../common/runtime.js');
@@ -323,7 +324,7 @@ ipcMain.handle('fetch-index-quote', () => {
   });
 });
 
-ipcMain.handle('fetch-stock-quotes', (event, codes) => {
+function fetchSinaQuotes(codes) {
   return new Promise((resolve) => {
     if (!codes || !codes.length) return resolve({ ok: true, quotes: {} });
     const toSina = c => (c.startsWith('6') || c.startsWith('9')) ? 'sh' + c : 'sz' + c;
@@ -363,6 +364,267 @@ ipcMain.handle('fetch-stock-quotes', (event, codes) => {
     req.on('error', e => resolve({ ok: false, error: e.message }));
     req.setTimeout(8000, () => { req.destroy(); resolve({ ok: false, error: 'timeout' }); });
   });
+}
+
+ipcMain.handle('fetch-stock-quotes', (event, codes) => fetchSinaQuotes(codes));
+
+// —— 详情面板：fetch-stock-detail / fetch-stock-kline ——
+const DETAIL_CACHE_MS = 15 * 1000;   // detail 轻量缓存 15 秒
+const KLINE_CACHE_MS = 5 * 60 * 1000; // 日K 缓存 5 分钟
+const ADV5_VOLUME_MIN = 5e7;         // 量能下限：ADV5 成交额 ≥ 5000 万
+const ADV5_VOLUME_STRONG = 1e8;      // 量能强：ADV5 成交额 ≥ 1 亿
+const PRICE_HIGH_PCT = 0.10;         // 偏离 MA20 超过 10% 视为位置偏高
+const EX_WEAK = 0.05;                // 5日超额 < 5% 视为动能偏弱
+const detailCache = new Map();       // code -> { at, data }
+const klineDayCache = new Map();     // code -> { at, rows }
+
+// 轻量 JSON 抓取：Node https 直连（不跟随系统代理），自动解压 gzip/deflate/br，失败重试 1 次
+// 说明：主进程全局 fetch 走 Chromium 网络栈（跟随系统代理），国内接口可能被代理出口的 WAF 拦截；
+//       与 sina 报价一致改用 https.get 直连，规避代理问题。
+async function httpGetJson(url, timeoutMs = 20000, extraHeaders = {}) {
+  let last = { ok: false, error: 'unknown' };
+  for (let i = 0; i < 2; i++) {
+    last = await new Promise((resolve) => {
+      const req = https.get(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', ...extraHeaders }
+      }, (res) => {
+        const chunks = [];
+        res.on('data', d => chunks.push(d));
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          const enc = (res.headers['content-encoding'] || '').toLowerCase();
+          try {
+            if (enc === 'gzip') buf = zlib.gunzipSync(buf);
+            else if (enc === 'deflate') buf = zlib.inflateSync(buf);
+            else if (enc === 'br') buf = zlib.brotliDecompressSync(buf);
+          } catch (e) {
+            return resolve({ ok: false, error: '解压失败:' + e.message });
+          }
+          try {
+            resolve({ ok: true, js: JSON.parse(buf.toString('utf8')) });
+          } catch (e) {
+            resolve({ ok: false, error: 'JSON解析失败', head: buf.toString('utf8').slice(0, 120).replace(/\s+/g, ' ') });
+          }
+        });
+      });
+      req.on('error', e => resolve({ ok: false, error: e.message }));
+      req.setTimeout(timeoutMs, () => { req.destroy(); resolve({ ok: false, error: 'timeout' }); });
+    });
+    if (last.ok) return last;
+  }
+  return last;
+}
+
+// 解析腾讯 fqkline 行：[date, open, close, high, low, volHand, ...]
+function parseTencentKlineRows(arr) {
+  const rows = [];
+  for (const it of arr) {
+    if (!Array.isArray(it) || it.length < 6) continue;
+    const [date, open, close, high, low, volHand] = it;
+    const o = Number(open), c = Number(close), h = Number(high), l = Number(low), v = Number(volHand);
+    if (!date || ![o, c, h, l, v].every(Number.isFinite) || [o, c, h, l].some(x => x <= 0)) continue;
+    rows.push({ date: String(date), open: o, close: c, high: h, low: l, volume: v, amount: c * v * 100 });
+  }
+  return rows;
+}
+
+// 解析东财 klines 行："date,open,close,high,low,vol,amount,amplitude,pct,chg,change"
+function parseEastmoneyKlines(klines) {
+  const rows = [];
+  for (const line of klines) {
+    const p = String(line).split(',');
+    if (p.length < 6) continue;
+    const date = String(p[0]).trim();
+    const o = Number(p[1]), c = Number(p[2]), h = Number(p[3]), l = Number(p[4]), v = Number(p[5]);
+    if (!date || ![o, c, h, l, v].every(Number.isFinite) || [o, c, h, l].some(x => x <= 0)) continue;
+    const amount = Number(p[6]);
+    rows.push({ date, open: o, close: c, high: h, low: l, volume: v, amount: Number.isFinite(amount) ? amount : c * v * 100 });
+  }
+  return rows;
+}
+
+// 日K 主接口：腾讯 fqkline，返回 { rows, err }
+async function fetchDayKlinesTencent(symbol) {
+  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${encodeURIComponent(symbol)},day,,,320,qfq`;
+  const res = await httpGetJson(url);
+  if (!res.ok) return { rows: null, err: res.error + (res.head ? ':' + res.head : '') };
+  if (res.js?.code !== 0) return { rows: null, err: 'code=' + res.js.code };
+  const node = res.js?.data?.[symbol];
+  const arr = node?.qfqday ?? node?.day ?? null;
+  if (!Array.isArray(arr) || !arr.length) return { rows: null, err: 'data为空' };
+  const rows = parseTencentKlineRows(arr);
+  return rows.length ? { rows, err: '' } : { rows: null, err: 'rows为空' };
+}
+
+// 日K 备选接口：东财 push2his（腾讯被 WAF/异常时的兜底），返回 { rows, err }
+async function fetchDayKlinesEastmoney(secid) {
+  const params = new URLSearchParams({
+    secid, klt: '101', fqt: '1', beg: '0', end: '20500101', lmt: '320',
+    fields1: 'f1,f2,f3,f4,f5,f6',
+    fields2: 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61',
+  });
+  const url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get?' + params.toString();
+  const res = await httpGetJson(url);
+  if (!res.ok) return { rows: null, err: res.error + (res.head ? ':' + res.head : '') };
+  const kl = res.js?.data?.klines;
+  if (!Array.isArray(kl) || !kl.length) return { rows: null, err: 'data为空' };
+  const rows = parseEastmoneyKlines(kl);
+  return rows.length ? { rows, err: '' } : { rows: null, err: 'rows为空' };
+}
+
+// 日K 第三备选：新浪日线（与新浪报价同域，直连通常可达），返回 { rows, err }
+async function fetchDayKlinesSina(symbol) {
+  const url = `https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=${encodeURIComponent(symbol)}&scale=240&ma=5&datalen=320`;
+  const res = await httpGetJson(url, 20000, { Referer: 'https://finance.sina.com.cn/' });
+  if (!res.ok) return { rows: null, err: res.error + (res.head ? ':' + res.head : '') };
+  if (!Array.isArray(res.js) || !res.js.length) return { rows: null, err: 'data为空' };
+  const rows = [];
+  for (const it of res.js) {
+    const date = String(it?.day ?? '').trim();
+    const o = Number(it?.open), c = Number(it?.close), h = Number(it?.high), l = Number(it?.low), v = Number(it?.volume);
+    if (!date || ![o, c, h, l, v].every(Number.isFinite) || [o, c, h, l].some(x => x <= 0)) continue;
+    rows.push({ date, open: o, close: c, high: h, low: l, volume: v, amount: c * v });
+  }
+  return rows.length ? { rows, err: '' } : { rows: null, err: 'rows为空' };
+}
+
+// 拉取日K：腾讯优先、东财次之、新浪兜底，返回 { rows, reason }
+async function fetchDayKlines(code) {
+  const key = String(code);
+  const cached = klineDayCache.get(key);
+  if (cached && Date.now() - cached.at < KLINE_CACHE_MS) return { rows: cached.rows, reason: '' };
+  const symbol = /^\d{6}$/.test(key)
+    ? ((key.startsWith('6') || key.startsWith('9')) ? 'sh' + key : 'sz' + key)
+    : null;
+  if (!symbol) return { rows: null, reason: '无效代码' };
+  const secid = (symbol.startsWith('sh') ? '1.' : '0.') + key;
+  const reasons = [];
+  const t = await fetchDayKlinesTencent(symbol);
+  if (t.rows && t.rows.length) {
+    klineDayCache.set(key, { at: Date.now(), rows: t.rows });
+    return { rows: t.rows, reason: '' };
+  }
+  reasons.push('腾讯(' + (t.err || '无数据') + ')');
+  const e = await fetchDayKlinesEastmoney(secid);
+  if (e.rows && e.rows.length) {
+    klineDayCache.set(key, { at: Date.now(), rows: e.rows });
+    return { rows: e.rows, reason: '' };
+  }
+  reasons.push('东财(' + (e.err || '无数据') + ')');
+  const s = await fetchDayKlinesSina(symbol);
+  if (s.rows && s.rows.length) {
+    klineDayCache.set(key, { at: Date.now(), rows: s.rows });
+    return { rows: s.rows, reason: '' };
+  }
+  reasons.push('新浪(' + (s.err || '无数据') + ')');
+  return { rows: null, reason: reasons.join('；') };
+}
+
+// 从 meta（轻量）或完整结果 JSON 中按代码查找入选股
+function findPickedByCode(code) {
+  const key = String(code);
+  const candidates = [path.join(OUTPUT_DIR, 'qscreen_all_a_meta.json'), path.join(OUTPUT_DIR, 'qscreen_all_a.json')];
+  for (const f of candidates) {
+    if (!fs.existsSync(f)) continue;
+    try {
+      const js = JSON.parse(fs.readFileSync(f, 'utf8'));
+      const picked = Array.isArray(js?.picked) ? js.picked : [];
+      const hit = picked.find(x => String(x.code) === key);
+      if (hit) return hit;
+    } catch {}
+  }
+  return null;
+}
+
+// 拼装一句轻量 decision，主进程统一判断，前端只做展示
+// 三档结论：继续关注 / 等回踩 / 暂不关注，另附 reason 说明判定依据
+function buildDecision(metrics) {
+  const close = Number(metrics?.close) || 0;
+  const ma20 = Number(metrics?.MA20) || 0;
+  const ret5 = Number(metrics?.ret_5d) || 0;
+  const idx5 = Number(metrics?.idx_ret_5d) || 0;
+  const adv5 = Number(metrics?.ADV5_amount) || 0;
+  const aboveMA20 = close > 0 && ma20 > 0 && close > ma20;
+  const beatsBenchmark = ret5 - idx5 > 0;
+  const volEnough = adv5 >= ADV5_VOLUME_MIN;
+  const volStrong = adv5 >= ADV5_VOLUME_STRONG;
+  const aboveMa20Pct = ma20 > 0 ? (close - ma20) / ma20 : 0;
+  const priceHigh = aboveMa20Pct > PRICE_HIGH_PCT;
+  const ex = ret5 - idx5;
+  const exWeak = ex < EX_WEAK;
+
+  let conclusion = '继续关注';
+  let reason = '';
+  if (!aboveMA20) { conclusion = '暂不关注'; reason = '未站上MA20'; }
+  else if (!beatsBenchmark) { conclusion = '暂不关注'; reason = '5日未跑赢基准'; }
+  else if (!volEnough) { conclusion = '暂不关注'; reason = '量能不足'; }
+  else if (priceHigh) { conclusion = '等回踩'; reason = '位置偏高'; }
+  else if (exWeak && !volStrong) { conclusion = '等回踩'; reason = '动能偏弱'; }
+  return { aboveMA20, beatsBenchmark, volEnough, volStrong, priceHigh, aboveMa20Pct, ex, conclusion, reason };
+}
+
+ipcMain.handle('fetch-stock-detail', async (event, code) => {
+  const key = String(code ?? '').trim();
+  if (!/^\d{6}$/.test(key)) return { ok: false, error: '无效股票代码' };
+  const cached = detailCache.get(key);
+  if (cached && Date.now() - cached.at < DETAIL_CACHE_MS) return cached.data;
+  try {
+    const stock = findPickedByCode(key);
+    if (!stock) return { ok: false, error: '未找到该股票（可能不在最近入选结果中）', code: key };
+    const q = await fetchSinaQuotes([key]);
+    const decision = buildDecision(stock.metrics || {});
+    const data = { ok: true, data: { stock, quote: q?.quotes?.[key] || null, decision } };
+    detailCache.set(key, { at: Date.now(), data });
+    return data;
+  } catch(e) {
+    return { ok: false, error: e.message, code: key };
+  }
+});
+
+// 由日线聚合出周K / 月K（周按周一为一周起点）
+function aggKline(rows, mode) {
+  const groups = new Map();
+  for (const r of rows) {
+    const d = new Date(r.date + 'T00:00:00');
+    if (Number.isNaN(d.getTime())) continue;
+    let key;
+    if (mode === 'week') {
+      const mon = new Date(d);
+      mon.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+      key = mon.toISOString().slice(0, 10);
+    } else {
+      key = r.date.slice(0, 7);
+    }
+    let g = groups.get(key);
+    if (!g) {
+      g = { date: r.date, open: r.open, close: r.close, high: r.high, low: r.low, volume: 0, amount: 0 };
+      groups.set(key, g);
+    }
+    g.date = r.date;
+    g.close = r.close;
+    g.high = Math.max(g.high, r.high);
+    g.low = Math.min(g.low, r.low);
+    g.volume += r.volume;
+    g.amount += r.amount;
+  }
+  return [...groups.values()];
+}
+
+ipcMain.handle('fetch-stock-kline', async (event, payload) => {
+  const code = String(payload?.code ?? '').trim();
+  const period = ['day', 'week', 'month'].includes(payload?.period) ? payload.period : 'day';
+  if (!/^\d{6}$/.test(code)) return { ok: false, error: '无效股票代码' };
+  try {
+    const got = await fetchDayKlines(code);
+    if (!got || !got.rows || !got.rows.length) {
+      return { ok: false, error: 'K线获取失败：' + (got?.reason || '数据为空'), code, period };
+    }
+    const rows = period === 'day' ? got.rows : aggKline(got.rows, period);
+    if (!rows.length) return { ok: false, error: 'K线聚合结果为空', code, period };
+    return { ok: true, data: { code, period, rows } };
+  } catch(e) {
+    return { ok: false, error: e.message, code, period };
+  }
 });
 
 ipcMain.handle('open-result', () => {

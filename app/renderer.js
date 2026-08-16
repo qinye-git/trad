@@ -196,7 +196,7 @@ function renderResults(picked,summary){
     const maStr=(!cl||!ma)?'--':(cl>ma?'<span class=up>✓</span>':'<span class=dn>✗</span>');
     const adv=x.metrics&&x.metrics.ADV5_amount;const n=Number(adv);let amtStr='--';
     if(isFinite(n)&&n){if(n>=1e8)amtStr=(n/1e8).toFixed(2)+'亿';else if(n>=1e4)amtStr=(n/1e4).toFixed(0)+'万';else amtStr=n.toFixed(0);}
-    return '<tr><td style="color:var(--text3);font-size:11px">'+(i+1)+'</td><td><span class=code-cell>'+code+'</span></td><td>'+name+'</td><td><span class="grade-badge '+grade+'">'+grade+'</span></td><td><div class=score-wrap>'+score.toFixed(1)+'<div class=score-track><div class=score-fill style="width:'+Math.min(100,score/8*100)+'%"></div></div></div></td><td>'+priceCell+'</td><td>'+exStr+'</td><td>'+amtStr+'</td><td>'+maStr+'</td><td><span class=industry-tag title="'+industryTitleE+'">'+industryE+'</span></td></tr>';
+    return '<tr data-code="'+code+'"><td style="color:var(--text3);font-size:11px">'+(i+1)+'</td><td><span class=code-cell>'+code+'</span></td><td>'+name+'</td><td><span class="grade-badge '+grade+'">'+grade+'</span></td><td><div class=score-wrap>'+score.toFixed(1)+'<div class=score-track><div class=score-fill style="width:'+Math.min(100,score/8*100)+'%"></div></div></div></td><td>'+priceCell+'</td><td>'+exStr+'</td><td>'+amtStr+'</td><td>'+maStr+'</td><td><span class=industry-tag title="'+industryTitleE+'">'+industryE+'</span></td></tr>';
   }).join('');
 }
 function appendLog(text){
@@ -408,6 +408,10 @@ window.renderResults=function(picked,summary){
   _origRenderResults(picked,summary);
   window._pickedCodes=(picked||[]).map(x=>x.code).filter(Boolean);
   if(isTradingTime())fetchLiveQuotes();
+  // 重新筛选后，若已选股票不在新结果中，则收起详情面板
+  if(window.DetailPanel&&window.DetailPanel.getSelectedCode()&&!window._pickedCodes.includes(window.DetailPanel.getSelectedCode())){
+    window.DetailPanel.close();
+  }
 };
 
 initParams();
@@ -451,5 +455,19 @@ function bindUI(){
   }
   on('btn-open-result','click',openResultFile);
   on('btn-view-summary','click',viewSummaryInApp);
+  // 结果表点击联动：tbody 事件代理，点击行打开右侧详情面板
+  const tbody=document.getElementById('results-tbody');
+  if(tbody){
+    tbody.addEventListener('click',e=>{
+      const tr=e.target.closest('tr[data-code]');
+      if(!tr)return;
+      const code=tr.getAttribute('data-code');
+      if(!code)return;
+      document.querySelectorAll('#results-tbody tr.selected').forEach(x=>x.classList.remove('selected'));
+      tr.classList.add('selected');
+      window.DetailPanel.open(code);
+    });
+  }
+  if(window.DetailPanel)window.DetailPanel.init();
 }
 bindUI();

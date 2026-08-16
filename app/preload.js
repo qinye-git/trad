@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('api', {
   readSummary: () => ipcRenderer.invoke('read-summary'),
   fetchIndexQuote: () => ipcRenderer.invoke('fetch-index-quote'),
   fetchStockQuotes: (codes) => ipcRenderer.invoke('fetch-stock-quotes', codes),
+  fetchStockDetail: (code) => ipcRenderer.invoke('fetch-stock-detail', code),
+  fetchStockKline: (payload) => ipcRenderer.invoke('fetch-stock-kline', payload),
   updateCodes: () => ipcRenderer.send('update-codes'),
   runScreen: () => ipcRenderer.send('run-screen'),
   runScreenFull: () => ipcRenderer.send('run-screen-full'),

@@ -488,6 +488,28 @@ async function fetchDayKlinesSina(symbol) {
   return rows.length ? { rows, err: '' } : { rows: null, err: 'rows为空' };
 }
 
+// 分时：新浪当日 5 分钟线（48 点）绘制分时走势，返回 { rows, err }
+// rows 每项 { date:'HH:MM', open, close, high, low, volume, amount, avg }，
+// avg 为当日累计均价（接口无成交额字段，用段均价(开高低收均值)*量累计近似）
+async function fetchMinuteSina(symbol) {
+  const url = `https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=${encodeURIComponent(symbol)}&scale=5&ma=no&datalen=48`;
+  const res = await httpGetJson(url, 20000, { Referer: 'https://finance.sina.com.cn/' });
+  if (!res.ok) return { rows: null, err: res.error + (res.head ? ':' + res.head : '') };
+  if (!Array.isArray(res.js) || !res.js.length) return { rows: null, err: 'data为空' };
+  const rows = [];
+  let sumAmt = 0, sumVol = 0;
+  for (const it of res.js) {
+    const day = String(it?.day ?? '');
+    const o = Number(it?.open), c = Number(it?.close), h = Number(it?.high), l = Number(it?.low), v = Number(it?.volume);
+    if (!day || ![o, c, h, l, v].every(Number.isFinite) || [o, c, h, l].some(x => x <= 0)) continue;
+    const date = day.length >= 16 ? day.slice(11, 16) : day; // 'YYYY-MM-DD HH:MM:SS' -> 'HH:MM'
+    sumAmt += ((o + h + l + c) / 4) * v;
+    sumVol += v;
+    rows.push({ date, open: o, close: c, high: h, low: l, volume: v, amount: c * v, avg: sumVol > 0 ? sumAmt / sumVol : c });
+  }
+  return rows.length ? { rows, err: '' } : { rows: null, err: 'rows为空' };
+}
+
 // 拉取日K：腾讯优先、东财次之、新浪兜底，返回 { rows, reason }
 async function fetchDayKlines(code) {
   const key = String(code);
@@ -612,9 +634,23 @@ function aggKline(rows, mode) {
 
 ipcMain.handle('fetch-stock-kline', async (event, payload) => {
   const code = String(payload?.code ?? '').trim();
-  const period = ['day', 'week', 'month'].includes(payload?.period) ? payload.period : 'day';
+  const period = ['min', 'day', 'week', 'month'].includes(payload?.period) ? payload.period : 'day';
   if (!/^\d{6}$/.test(code)) return { ok: false, error: '无效股票代码' };
   try {
+    if (period === 'min') {
+      const cacheKey = code + ':min';
+      const cached = klineDayCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < KLINE_CACHE_MS) {
+        return { ok: true, data: { code, period, rows: cached.rows } };
+      }
+      const symbol = (code.startsWith('6') || code.startsWith('9')) ? 'sh' + code : 'sz' + code;
+      const m = await fetchMinuteSina(symbol);
+      if (m.rows && m.rows.length) {
+        klineDayCache.set(cacheKey, { at: Date.now(), rows: m.rows });
+        return { ok: true, data: { code, period, rows: m.rows } };
+      }
+      return { ok: false, error: '分时获取失败：' + (m.err || '数据为空'), code, period };
+    }
     const got = await fetchDayKlines(code);
     if (!got || !got.rows || !got.rows.length) {
       return { ok: false, error: 'K线获取失败：' + (got?.reason || '数据为空'), code, period };

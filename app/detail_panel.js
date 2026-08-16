@@ -3,6 +3,7 @@
   'use strict';
   const DETAIL_TTL = 15 * 1000;  // 与主进程 detail 缓存一致
   const KLINE_TTL = 5 * 60 * 1000;
+  const MIN_POLL_MS = 20 * 1000; // 分时轮询周期（盘中走势自动跟进）
 
   const state = {
     selectedCode: null,
@@ -12,6 +13,7 @@
     requestId: 0,
     detailCache: new Map(),   // code -> { at, res }
     klineCache: new Map(),    // code+period -> { at, res }
+    pollTimer: null,          // 分时轮询定时器
   };
 
   const $ = id => document.getElementById(id);
@@ -66,9 +68,11 @@
     panel.setAttribute('aria-hidden', 'false');
     showState('loading');
     loadDetail(code);
+    if (state.activeTab === 'min') startPolling(code);
   }
 
   function close() {
+    stopPolling();
     state.visible = false;
     state.selectedCode = null;
     state.requestId++; // 作废进行中的请求
@@ -90,7 +94,11 @@
       btn.classList.toggle('active', on);
       btn.setAttribute('aria-selected', on ? 'true' : 'false');
     });
-    if (state.visible && state.selectedCode) loadKline(state.selectedCode, period);
+    if (state.visible && state.selectedCode) {
+      loadKline(state.selectedCode, period);
+      if (period === 'min') startPolling(state.selectedCode);
+      else stopPolling();
+    }
   }
 
   // —— 详情数据 ——
@@ -255,7 +263,22 @@
   }
 
   // —— K线 ——
-  async function loadKline(code, period) {
+  // 分时轮询：仅当面板打开且停留在分时 tab 时，每 MIN_POLL_MS 强制拉最新分时
+  function startPolling(code) {
+    stopPolling();
+    state.pollTimer = setTimeout(async () => {
+      state.pollTimer = null;
+      if (!state.visible || state.selectedCode !== code || state.activeTab !== 'min') return;
+      await loadKline(code, 'min', true);
+      if (state.visible && state.selectedCode === code && state.activeTab === 'min') startPolling(code);
+    }, MIN_POLL_MS);
+  }
+
+  function stopPolling() {
+    if (state.pollTimer) { clearTimeout(state.pollTimer); state.pollTimer = null; }
+  }
+
+  async function loadKline(code, period, force) {
     const cacheKey = code + ':' + period;
     const cached = state.klineCache.get(cacheKey);
     const rid = ++state.requestId;
@@ -266,16 +289,19 @@
         $('dp-chart-empty').style.display = 'none';
         window.DetailChart.render($('dp-chart'), res.data.rows, res.data.period || period);
       } else {
-        $('dp-chart-empty').textContent = res?.error || '暂无图表数据，点击重试';
-        $('dp-chart-empty').style.display = 'flex';
+        // 轮询失败静默保留旧图（避免闪烁），仅首次加载失败时展示错误
+        if (!force) {
+          $('dp-chart-empty').textContent = res?.error || '暂无图表数据，点击重试';
+          $('dp-chart-empty').style.display = 'flex';
+        }
       }
     };
-    if (cached && Date.now() - cached.at < KLINE_TTL) {
+    if (!force && cached && Date.now() - cached.at < KLINE_TTL) {
       show(cached.res);
       return;
     }
     try {
-      const res = await window.api.fetchStockKline({ code, period });
+      const res = await window.api.fetchStockKline({ code, period, force });
       show(res);
     } catch (e) {
       show({ ok: false, error: e.message });

@@ -133,7 +133,7 @@ signals:
         intent: "解禁压力"
 
 scoring:
-  total_points: 10
+  total_points: 5
   rules:
     - id: beat_benchmark_bonus
       rule: "ret_5d - idx_ret_5d >= 0.03"

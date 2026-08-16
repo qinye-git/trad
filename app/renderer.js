@@ -196,7 +196,7 @@ function renderResults(picked,summary){
     const maStr=(!cl||!ma)?'--':(cl>ma?'<span class=up>✓</span>':'<span class=dn>✗</span>');
     const adv=x.metrics&&x.metrics.ADV5_amount;const n=Number(adv);let amtStr='--';
     if(isFinite(n)&&n){if(n>=1e8)amtStr=(n/1e8).toFixed(2)+'亿';else if(n>=1e4)amtStr=(n/1e4).toFixed(0)+'万';else amtStr=n.toFixed(0);}
-    return '<tr data-code="'+code+'"><td style="color:var(--text3);font-size:11px">'+(i+1)+'</td><td><span class=code-cell>'+code+'</span></td><td>'+name+'</td><td><span class="grade-badge '+grade+'">'+grade+'</span></td><td><div class=score-wrap>'+score.toFixed(1)+'<div class=score-track><div class=score-fill style="width:'+Math.min(100,score/8*100)+'%"></div></div></div></td><td>'+priceCell+'</td><td>'+exStr+'</td><td>'+amtStr+'</td><td>'+maStr+'</td><td><span class=industry-tag title="'+industryTitleE+'">'+industryE+'</span></td></tr>';
+    return '<tr data-code="'+code+'"><td style="color:var(--text3);font-size:11px">'+(i+1)+'</td><td><span class=code-cell>'+code+'</span></td><td>'+name+'</td><td><span class="grade-badge '+grade+'">'+grade+'</span></td><td><div class=score-wrap>'+score.toFixed(1)+'<div class=score-track><div class=score-fill style="width:'+Math.min(100,score/5*100)+'%"></div></div></div></td><td>'+priceCell+'</td><td>'+exStr+'</td><td>'+amtStr+'</td><td>'+maStr+'</td><td><span class=industry-tag title="'+industryTitleE+'">'+industryE+'</span></td></tr>';
   }).join('');
 }
 function appendLog(text){

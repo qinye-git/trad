@@ -69,7 +69,7 @@ const PARAM_SCHEMA = {
   adv5_vol_ratio_max:      { type: 'number', min: 0.1, max: 10 },
   above_ma20:              { type: 'boolean' },
   min_grade:               { type: 'enum', values: ['A', 'B', 'C'] },
-  min_score:               { type: 'integer', min: 1, max: 8 },
+  min_score:               { type: 'integer', min: 1, max: 5 },
 };
 
 function sanitizeParams(raw) {
@@ -640,7 +640,8 @@ ipcMain.handle('fetch-stock-kline', async (event, payload) => {
     if (period === 'min') {
       const cacheKey = code + ':min';
       const cached = klineDayCache.get(cacheKey);
-      if (cached && Date.now() - cached.at < KLINE_CACHE_MS) {
+      // 分时轮询(force)时跳过主进程缓存，保证拉到最新走势
+      if (!payload?.force && cached && Date.now() - cached.at < KLINE_CACHE_MS) {
         return { ok: true, data: { code, period, rows: cached.rows } };
       }
       const symbol = (code.startsWith('6') || code.startsWith('9')) ? 'sh' + code : 'sz' + code;

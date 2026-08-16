@@ -31,7 +31,7 @@ function switchTab(name){
   ['results','log','summary'].forEach(t=>{
     const btn=document.getElementById('tab-btn-'+t);
     const cont=document.getElementById('tab-'+t);
-    if(btn)btn.classList.toggle('active',t===name);
+    if(btn){btn.classList.toggle('active',t===name);btn.setAttribute('aria-selected',t===name?'true':'false');}
     if(cont)cont.classList.toggle('active',t===name);
   });
   // 切到结果页且窗口可见时，立即刷新一次实时报价（避免在低频哨兵期等待）
@@ -217,8 +217,8 @@ function setDotState(state, label){
 }
 function setRunning(running,label){
   isRunning=running;
-  ['btn-screen','btn-screen-full','btn-update'].forEach(id=>document.getElementById(id).classList.toggle('disabled',running));
-  document.getElementById('btn-cancel').classList.toggle('disabled',!running);
+  ['btn-screen','btn-screen-full','btn-update'].forEach(id=>{const el=document.getElementById(id);el.classList.toggle('disabled',running);el.disabled=running;});
+  const cancel=document.getElementById('btn-cancel');cancel.classList.toggle('disabled',!running);cancel.disabled=!running;
   if(running){
     setDotState('running',label);
     // 超时保护：30分钟后强制重置
@@ -239,7 +239,7 @@ function bindTask(logCh,doneCh,label){
   const pbPct=document.getElementById('progress-pct');
   const pbSub=document.getElementById('progress-sub');
   if(pbWrap){pbWrap.style.display='block';}
-  if(pbFill){pbFill.style.width='0%';pbFill.style.background='var(--red)';}
+  if(pbFill){pbFill.style.width='0%';pbFill.style.background='var(--accent)';}
   if(pbPct)pbPct.textContent='0%';
   if(pbSub)pbSub.textContent='准备中...';
   setRunning(true,label);switchTab('log');appendLog('▶ '+label);appendLog('─'.repeat(48));
@@ -268,7 +268,7 @@ function bindTask(logCh,doneCh,label){
     if(data&&data.error) appendLog('[stderr] '+data.error);
     appendLog(data.code===0?'✅ 完成':'✗ 异常 code='+data.code);
     if(pbFill&&data.code===0){pbFill.style.width='100%';pbFill.style.background='var(--green)';if(pbPct)pbPct.textContent='100%';}
-    setTimeout(()=>{if(pbWrap)pbWrap.style.display='none';if(pbFill)pbFill.style.background='var(--red)';},4000);
+    setTimeout(()=>{if(pbWrap)pbWrap.style.display='none';if(pbFill)pbFill.style.background='var(--accent)';},4000);
     setRunning(false);
     if(data.code===0){await refreshStatus();setTimeout(()=>switchTab('results'),600);}
   });
@@ -435,6 +435,20 @@ function bindUI(){
   on('tab-btn-results','click',()=>switchTab('results'));
   on('tab-btn-log','click',()=>switchTab('log'));
   on('tab-btn-summary','click',()=>switchTab('summary'));
+  // Tab 方向键切换（Home/End 定位首/尾）
+  const tabsEl=document.querySelector('.tabs');
+  if(tabsEl){
+    tabsEl.addEventListener('keydown',e=>{
+      const names=['results','log','summary'];
+      let delta=e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:e.key==='Home'?-names.length:e.key==='End'?names.length:0;
+      if(!delta)return;
+      e.preventDefault();
+      const cur=names.findIndex(n=>document.getElementById('tab-btn-'+n).classList.contains('active'));
+      const target=names[(cur+delta+names.length)%names.length];
+      switchTab(target);
+      document.getElementById('tab-btn-'+target).focus();
+    });
+  }
   on('btn-open-result','click',openResultFile);
   on('btn-view-summary','click',viewSummaryInApp);
 }

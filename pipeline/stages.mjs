@@ -75,6 +75,16 @@ export function runValuationStep({ pyScript, candidatesPath, candidateCodes, val
     const isTimeout = String(e?.code ?? '').toUpperCase() === 'ETIMEDOUT';
     if (isTimeout) {
       console.warn(`[警告] Step2 PE/PB查询超过 ${VALUATION_TIMEOUT_MS / 1000}s 仍未完成，已终止子进程`);
+      // 超时被杀时 Python 端 to_csv 可能只写了一半，残留文件会被下方 existsSync 误判为有效，
+      // 删除后强制走旧估值文件回退（或无可回退时跳过估值规则）。
+      try {
+        if (fs.existsSync(valSnapshotPath)) {
+          fs.rmSync(valSnapshotPath, { force: true });
+          console.warn('[警告] 已删除超时产生的半截估值文件，回退旧估值文件');
+        }
+      } catch (cleanupErr) {
+        console.warn('清理半截估值文件失败（忽略）:', cleanupErr.message);
+      }
     } else {
       console.warn('PE/PB查询失败（跳过估值规则）:', e.message);
     }
